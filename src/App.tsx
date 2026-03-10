@@ -13,7 +13,11 @@ import {
   Building2,
   X,
   PieChart as PieChartIcon,
-  Search
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Repeat,
+  Activity
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -23,7 +27,7 @@ import {
   Tooltip, 
   Legend 
 } from 'recharts';
-import { format, isPast, parseISO, isToday } from 'date-fns';
+import { format, isPast, parseISO, isToday, addMonths, subMonths, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -41,6 +45,8 @@ interface Expense {
   amount: number;
   dueDate: string;
   status: 'efetivado' | 'neutro';
+  classification: 'fixa' | 'variável';
+  paidMonths?: string[];
   description?: string;
 }
 
@@ -56,6 +62,7 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [currentDate, setCurrentDate] = useState(new Date());
   
   // Form state
   const [formData, setFormData] = useState({
@@ -63,6 +70,7 @@ export default function App() {
     type: 'água' as 'água' | 'luz',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro',
+    classification: 'fixa' as 'fixa' | 'variável',
     description: ''
   });
 
@@ -70,7 +78,14 @@ export default function App() {
     const saved = localStorage.getItem('condofinance_expenses');
     if (saved) {
       try {
-        setExpenses(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        // Migration for old data
+        const migrated = parsed.map((e: any) => ({
+          ...e,
+          classification: e.classification || 'fixa',
+          paidMonths: e.paidMonths || (e.status === 'efetivado' ? [format(parseISO(e.dueDate), 'yyyy-MM')] : [])
+        }));
+        setExpenses(migrated);
       } catch (e) {
         console.error('Failed to parse expenses from localStorage', e);
       }
@@ -85,10 +100,12 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const currentMonthStr = format(parseISO(formData.dueDate), 'yyyy-MM');
     const newExpense: Expense = {
       ...formData,
       id: Date.now(),
-      amount: 0
+      amount: 0,
+      paidMonths: formData.status === 'efetivado' ? [currentMonthStr] : []
     };
     const updatedExpenses = [newExpense, ...expenses];
     saveToLocalStorage(updatedExpenses);
@@ -98,16 +115,28 @@ export default function App() {
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
+      classification: 'fixa',
       description: ''
     });
   };
 
   const toggleStatus = async (expense: Expense) => {
-    const updatedExpenses = expenses.map(e => 
-      e.id === expense.id 
-        ? { ...e, status: e.status === 'efetivado' ? 'neutro' : 'efetivado' } as Expense
-        : e
-    );
+    const currentMonthStr = format(currentDate, 'yyyy-MM');
+    
+    const updatedExpenses = expenses.map(e => {
+      if (e.id !== expense.id) return e;
+      
+      if (e.classification === 'variável') {
+        return { ...e, status: e.status === 'efetivado' ? 'neutro' : 'efetivado' } as Expense;
+      } else {
+        const paidMonths = e.paidMonths || [];
+        const isPaid = paidMonths.includes(currentMonthStr);
+        const newPaidMonths = isPaid 
+          ? paidMonths.filter(m => m !== currentMonthStr)
+          : [...paidMonths, currentMonthStr];
+        return { ...e, paidMonths: newPaidMonths } as Expense;
+      }
+    });
     saveToLocalStorage(updatedExpenses);
   };
 
@@ -117,20 +146,51 @@ export default function App() {
     saveToLocalStorage(updatedExpenses);
   };
 
+  const nextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
+  const prevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
+
   const filteredExpenses = useMemo(() => {
-    return expenses.filter(e => {
+    const start = startOfMonth(currentDate);
+    const end = endOfMonth(currentDate);
+    const currentMonthStr = format(currentDate, 'yyyy-MM');
+
+    return expenses.flatMap(e => {
+      const expenseDate = parseISO(e.dueDate);
+      
+      if (e.classification === 'variável') {
+        if (isWithinInterval(expenseDate, { start, end })) {
+          return [e];
+        }
+        return [];
+      } else {
+        // Fixed expense: Show if it started in this month or before
+        if (expenseDate <= end) {
+          const isPaidThisMonth = e.paidMonths?.includes(currentMonthStr);
+          
+          // Project the due date to the current month for display/overdue logic
+          const displayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), expenseDate.getDate());
+          
+          return [{
+            ...e,
+            status: isPaidThisMonth ? 'efetivado' : 'neutro',
+            dueDate: format(displayDate, 'yyyy-MM-dd')
+          }];
+        }
+        return [];
+      }
+    }).filter(e => {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
     });
-  }, [expenses, filterStatus, searchTerm]);
+  }, [expenses, filterStatus, searchTerm, currentDate]);
 
   const chartData = useMemo(() => {
     let lançadas = 0;
     let aVencer = 0;
     let vencidas = 0;
 
-    expenses.forEach(e => {
+    filteredExpenses.forEach(e => {
       if (e.status === 'efetivado') {
         lançadas++;
       } else {
@@ -151,13 +211,13 @@ export default function App() {
       { name: 'A Vencer', value: aVencer, percentage: ((aVencer / total) * 100).toFixed(1), color: COLORS.aVencer },
       { name: 'Vencidas', value: vencidas, percentage: ((vencidas / total) * 100).toFixed(1), color: COLORS.vencidas }
     ].filter(d => d.value > 0);
-  }, [expenses]);
+  }, [filteredExpenses]);
 
   const stats = useMemo(() => {
-    const totalCount = expenses.length;
-    const effectiveCount = expenses.filter(e => e.status === 'efetivado').length;
-    const overdueCount = expenses.filter(e => e.status === 'neutro' && isPast(parseISO(e.dueDate)) && !isToday(parseISO(e.dueDate))).length;
-    const pendingCount = expenses.filter(e => e.status === 'neutro' && (!isPast(parseISO(e.dueDate)) || isToday(parseISO(e.dueDate)))).length;
+    const totalCount = filteredExpenses.length;
+    const effectiveCount = filteredExpenses.filter(e => e.status === 'efetivado').length;
+    const overdueCount = filteredExpenses.filter(e => e.status === 'neutro' && isPast(parseISO(e.dueDate)) && !isToday(parseISO(e.dueDate))).length;
+    const pendingCount = filteredExpenses.filter(e => e.status === 'neutro' && (!isPast(parseISO(e.dueDate)) || isToday(parseISO(e.dueDate)))).length;
 
     return { 
       total: totalCount, 
@@ -168,7 +228,7 @@ export default function App() {
       overduePerc: totalCount ? ((overdueCount / totalCount) * 100).toFixed(0) : 0,
       pendingPerc: totalCount ? ((pendingCount / totalCount) * 100).toFixed(0) : 0
     };
-  }, [expenses]);
+  }, [filteredExpenses]);
 
   if (loading) {
     return (
@@ -200,10 +260,41 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Month Navigation */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+          <div>
+            <h2 className="text-3xl font-light text-zinc-500">
+              Despesas com <span className="font-bold text-zinc-900">Vencimento em {format(currentDate, "MMM/yyyy", { locale: ptBR })}</span>
+            </h2>
+            <div className="flex items-center gap-2 mt-2 text-sm text-zinc-400 font-medium uppercase tracking-wider">
+              <Filter className="w-3.5 h-3.5" />
+              Status: {filterStatus === 'all' ? 'Todas' : filterStatus === 'efetivado' ? 'Lançadas' : 'Neutras'}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+            <button 
+              onClick={prevMonth}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              {format(subMonths(currentDate, 1), "MMM/yyyy", { locale: ptBR })}
+            </button>
+            <div className="w-px h-6 bg-zinc-200 mx-1" />
+            <button 
+              onClick={nextMonth}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm"
+            >
+              {format(addMonths(currentDate, 1), "MMM/yyyy", { locale: ptBR })}
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <StatCard 
-            label="Total de Lançamentos" 
+            label="Total no Mês" 
             value={`${stats.total}`} 
             icon={<TrendingUp className="w-5 h-5 text-primary" />} 
           />
@@ -234,7 +325,7 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="font-semibold text-lg">Visão Geral (%)</h2>
+                <h2 className="font-semibold text-lg">Resumo em {format(currentDate, "MMM/yyyy", { locale: ptBR })}</h2>
                 <div className="flex items-center gap-2 bg-zinc-100 p-1 rounded-lg">
                   {(['all', 'efetivado', 'neutro'] as const).map((s) => (
                     <button
@@ -337,11 +428,18 @@ export default function App() {
                                     Vencido
                                   </span>
                                 )}
+                                <span className={cn(
+                                  "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter flex items-center gap-1",
+                                  expense.classification === 'fixa' ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                                )}>
+                                  {expense.classification === 'fixa' ? <Repeat className="w-2.5 h-2.5" /> : <Activity className="w-2.5 h-2.5" />}
+                                  {expense.classification}
+                                </span>
                               </div>
                               <div className="flex items-center gap-4 text-sm text-zinc-500">
                                 <span className="flex items-center gap-1">
                                   <Calendar className="w-3.5 h-3.5" />
-                                  {format(parseISO(expense.dueDate), "dd 'de' MMMM", { locale: ptBR })}
+                                  {format(parseISO(expense.dueDate), "dd/MM/yy")}
                                 </span>
                                 <span className="capitalize">{expense.type}</span>
                               </div>
@@ -382,8 +480,8 @@ export default function App() {
                     <div className="bg-zinc-50 p-4 rounded-full mb-4">
                       <Plus className="w-8 h-8 opacity-20" />
                     </div>
-                    <p className="font-medium">Nenhum lançamento encontrado</p>
-                    <p className="text-sm">Comece adicionando uma nova despesa</p>
+                    <p className="font-medium">Nenhum lançamento para este mês</p>
+                    <p className="text-sm">Tente mudar o mês ou adicionar uma nova despesa</p>
                   </div>
                 )}
               </div>
@@ -460,6 +558,38 @@ export default function App() {
                       onChange={e => setFormData({...formData, dueDate: e.target.value})}
                       className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50"
                     />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Classificação</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, classification: 'fixa'})}
+                      className={cn(
+                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
+                        formData.classification === 'fixa' 
+                          ? "border-emerald-500 bg-emerald-50 text-emerald-700" 
+                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                      )}
+                    >
+                      <Repeat className="w-4 h-4" />
+                      Fixa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, classification: 'variável'})}
+                      className={cn(
+                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
+                        formData.classification === 'variável' 
+                          ? "border-amber-500 bg-amber-50 text-amber-700" 
+                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                      )}
+                    >
+                      <Activity className="w-4 h-4" />
+                      Variável
+                    </button>
                   </div>
                 </div>
 
