@@ -1,0 +1,5 @@
+{
+  "name": "CondoFinance - Gestor de Despesas",
+  "description": "Sistema de administração de lançamentos de água e luz para condomínios com acompanhamento de vencimentos e gráficos.",
+  "requestFramePermissions": []
+}
