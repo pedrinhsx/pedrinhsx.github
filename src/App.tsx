@@ -44,7 +44,6 @@ interface Expense {
   id: number;
   condominium: string;
   type: 'água' | 'luz';
-  amount: number;
   dueDate: string;
   status: 'efetivado' | 'neutro';
   classification: 'fixa' | 'variável';
@@ -85,20 +84,36 @@ export default function App() {
   });
 
   const [bulkExpenses, setBulkExpenses] = useState([{
+    condominium: '',
     type: 'água' as 'água' | 'luz',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro',
     classification: 'fixa' as 'fixa' | 'variável',
+    description: ''
   }]);
 
-  const condominiumSuggestions = useMemo(() => {
-    if (!formData.condominium) return [];
-    const uniqueCondos = Array.from(new Set<string>(expenses.map(e => e.condominium)));
+  const suggestionRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node)) {
+        setActiveSuggestionIdx(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<{type: 'single' | 'bulk', index?: number} | null>(null);
+
+  const getCondoSuggestions = (input: string) => {
+    const uniqueCondos = Array.from(new Set<string>(expenses.map(e => e.condominium))).filter(Boolean);
+    if (!input) return uniqueCondos.slice(0, 5);
     return uniqueCondos.filter(c => 
-      c.toLowerCase().includes(formData.condominium.toLowerCase()) &&
-      c.toLowerCase() !== formData.condominium.toLowerCase()
+      c.toLowerCase().includes(input.toLowerCase()) &&
+      c.toLowerCase() !== input.toLowerCase()
     ).slice(0, 5);
-  }, [formData.condominium, expenses]);
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem('condofinance_expenses');
@@ -140,7 +155,6 @@ export default function App() {
       const newExpense: Expense = {
         ...formData,
         id: Date.now(),
-        amount: 0,
         paidMonths: formData.status === 'efetivado' ? [currentMonthStr] : []
       };
       saveToLocalStorage([newExpense, ...expenses]);
@@ -148,10 +162,8 @@ export default function App() {
       const newExpenses: Expense[] = bulkExpenses.map((be, index) => {
         const currentMonthStr = format(parseISO(be.dueDate), 'yyyy-MM');
         return {
-          condominium: formData.condominium,
           ...be,
           id: Date.now() + index,
-          amount: 0,
           paidMonths: be.status === 'efetivado' ? [currentMonthStr] : []
         };
       });
@@ -174,11 +186,14 @@ export default function App() {
       description: ''
     });
     setBulkExpenses([{
+      condominium: '',
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
       classification: 'fixa',
+      description: ''
     }]);
+    setActiveSuggestionIdx(null);
   };
 
   const openEdit = (expense: Expense) => {
@@ -761,31 +776,43 @@ export default function App() {
               )}
 
               <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="relative">
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Condomínio</label>
-                  <input 
-                    required
-                    type="text" 
-                    value={formData.condominium}
-                    onChange={e => setFormData({...formData, condominium: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
-                    placeholder="Ex: Edifício Solar"
-                  />
-                  {condominiumSuggestions.length > 0 && (
-                    <div className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden">
-                      {condominiumSuggestions.map((suggestion, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          onClick={() => setFormData({...formData, condominium: suggestion})}
-                          className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                {formTab === 'single' && (
+                    <div className="relative w-full">
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Condomínio</label>
+                      <input 
+                        required
+                        type="text" 
+                        value={formData.condominium}
+                        onChange={e => {
+                          setFormData({...formData, condominium: e.target.value});
+                          setActiveSuggestionIdx({ type: 'single' });
+                        }}
+                        onFocus={() => setActiveSuggestionIdx({ type: 'single' })}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
+                        placeholder="Ex: Edifício Solar"
+                      />
+                      {activeSuggestionIdx?.type === 'single' && getCondoSuggestions(formData.condominium).length > 0 && (
+                        <div 
+                          ref={suggestionRef}
+                          className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto"
                         >
-                          {suggestion}
-                        </button>
-                      ))}
+                          {getCondoSuggestions(formData.condominium).map((suggestion, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => {
+                                setFormData({...formData, condominium: suggestion});
+                                setActiveSuggestionIdx(null);
+                              }}
+                              className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                            >
+                              {suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                )}
                 
                 {formTab === 'single' ? (
                   <>
@@ -874,6 +901,16 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Descrição (Opcional)</label>
+                      <textarea 
+                        value={formData.description}
+                        onChange={e => setFormData({...formData, description: e.target.value})}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50 resize-none h-20"
+                        placeholder="Ex: Referente ao mês de Janeiro"
+                      />
+                    </div>
                   </>
                 ) : (
                   <div className="space-y-4">
@@ -882,10 +919,13 @@ export default function App() {
                       <button 
                         type="button"
                         onClick={() => setBulkExpenses([...bulkExpenses, {
+                          condominium: '',
                           type: 'água',
+                          amount: '',
                           dueDate: format(new Date(), 'yyyy-MM-dd'),
                           status: 'neutro',
                           classification: 'fixa',
+                          description: ''
                         }])}
                         className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
                       >
@@ -895,6 +935,46 @@ export default function App() {
                     
                     {bulkExpenses.map((be, idx) => (
                       <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-200 relative group/bulk">
+                        <div className="relative mb-4">
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Condomínio</label>
+                          <input 
+                            required
+                            type="text" 
+                            value={be.condominium}
+                            onChange={e => {
+                              const newBulk = [...bulkExpenses];
+                              newBulk[idx].condominium = e.target.value;
+                              setBulkExpenses(newBulk);
+                              setActiveSuggestionIdx({ type: 'bulk', index: idx });
+                            }}
+                            onFocus={() => setActiveSuggestionIdx({ type: 'bulk', index: idx })}
+                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none bg-white"
+                            placeholder="Nome do condomínio"
+                          />
+                          {activeSuggestionIdx?.type === 'bulk' && activeSuggestionIdx.index === idx && getCondoSuggestions(be.condominium).length > 0 && (
+                            <div 
+                              ref={suggestionRef}
+                              className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-40 overflow-y-auto"
+                            >
+                              {getCondoSuggestions(be.condominium).map((suggestion, i) => (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => {
+                                    const newBulk = [...bulkExpenses];
+                                    newBulk[idx].condominium = suggestion;
+                                    setBulkExpenses(newBulk);
+                                    setActiveSuggestionIdx(null);
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                                >
+                                  {suggestion}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
                         <div className="grid grid-cols-2 gap-4 mb-4">
                           <div>
                             <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Tipo</label>
@@ -925,7 +1005,7 @@ export default function App() {
                             />
                           </div>
                         </div>
-                        <div className="flex items-center gap-4">
+                        <div className="grid grid-cols-2 gap-4 mb-4">
                           <div className="flex-1 flex gap-2">
                             <button
                               type="button"
@@ -956,15 +1036,28 @@ export default function App() {
                               {be.status === 'efetivado' ? 'Lançada' : 'Pendente'}
                             </button>
                           </div>
-                          {bulkExpenses.length > 1 && (
-                            <button 
-                              type="button"
-                              onClick={() => setBulkExpenses(bulkExpenses.filter((_, i) => i !== idx))}
-                              className="p-2 text-zinc-400 hover:text-rose-500 transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="text" 
+                              value={be.description}
+                              onChange={e => {
+                                const newBulk = [...bulkExpenses];
+                                newBulk[idx].description = e.target.value;
+                                setBulkExpenses(newBulk);
+                              }}
+                              className="flex-1 px-3 py-1.5 rounded-lg border border-zinc-200 text-[10px] outline-none bg-white"
+                              placeholder="Descrição (opcional)"
+                            />
+                            {bulkExpenses.length > 1 && (
+                              <button 
+                                type="button"
+                                onClick={() => setBulkExpenses(bulkExpenses.filter((_, i) => i !== idx))}
+                                className="p-2 text-zinc-400 hover:text-rose-500 transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
