@@ -17,7 +17,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Repeat,
-  Activity
+  Activity,
+  Edit2,
+  Layers
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -27,7 +29,7 @@ import {
   Tooltip, 
   Legend 
 } from 'recharts';
-import { format, isPast, parseISO, isToday, addMonths, subMonths, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { format, isPast, parseISO, isToday, addMonths, subMonths, startOfMonth, endOfMonth, isWithinInterval, startOfWeek, endOfWeek, startOfDay, endOfDay, startOfYear, endOfYear } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -62,7 +64,15 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [formTab, setFormTab] = useState<'single' | 'multiple'>('single');
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual'>('monthly');
+  const [customRange, setCustomRange] = useState({
+    start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
+  });
+  const [quickFilter, setQuickFilter] = useState<'none' | 'today' | 'week' | 'month'>('none');
   
   // Form state
   const [formData, setFormData] = useState({
@@ -73,6 +83,22 @@ export default function App() {
     classification: 'fixa' as 'fixa' | 'variável',
     description: ''
   });
+
+  const [bulkExpenses, setBulkExpenses] = useState([{
+    type: 'água' as 'água' | 'luz',
+    dueDate: format(new Date(), 'yyyy-MM-dd'),
+    status: 'neutro' as 'efetivado' | 'neutro',
+    classification: 'fixa' as 'fixa' | 'variável',
+  }]);
+
+  const condominiumSuggestions = useMemo(() => {
+    if (!formData.condominium) return [];
+    const uniqueCondos = Array.from(new Set<string>(expenses.map(e => e.condominium)));
+    return uniqueCondos.filter(c => 
+      c.toLowerCase().includes(formData.condominium.toLowerCase()) &&
+      c.toLowerCase() !== formData.condominium.toLowerCase()
+    ).slice(0, 5);
+  }, [formData.condominium, expenses]);
 
   useEffect(() => {
     const saved = localStorage.getItem('condofinance_expenses');
@@ -100,16 +126,45 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const currentMonthStr = format(parseISO(formData.dueDate), 'yyyy-MM');
-    const newExpense: Expense = {
-      ...formData,
-      id: Date.now(),
-      amount: 0,
-      paidMonths: formData.status === 'efetivado' ? [currentMonthStr] : []
-    };
-    const updatedExpenses = [newExpense, ...expenses];
-    saveToLocalStorage(updatedExpenses);
+    
+    if (editingExpense) {
+      const updatedExpenses = expenses.map(ex => {
+        if (ex.id === editingExpense.id) {
+          return { ...ex, ...formData };
+        }
+        return ex;
+      });
+      saveToLocalStorage(updatedExpenses);
+    } else if (formTab === 'single') {
+      const currentMonthStr = format(parseISO(formData.dueDate), 'yyyy-MM');
+      const newExpense: Expense = {
+        ...formData,
+        id: Date.now(),
+        amount: 0,
+        paidMonths: formData.status === 'efetivado' ? [currentMonthStr] : []
+      };
+      saveToLocalStorage([newExpense, ...expenses]);
+    } else {
+      const newExpenses: Expense[] = bulkExpenses.map((be, index) => {
+        const currentMonthStr = format(parseISO(be.dueDate), 'yyyy-MM');
+        return {
+          condominium: formData.condominium,
+          ...be,
+          id: Date.now() + index,
+          amount: 0,
+          paidMonths: be.status === 'efetivado' ? [currentMonthStr] : []
+        };
+      });
+      saveToLocalStorage([...newExpenses, ...expenses]);
+    }
+
+    closeForm();
+  };
+
+  const closeForm = () => {
     setShowForm(false);
+    setEditingExpense(null);
+    setFormTab('single');
     setFormData({
       condominium: '',
       type: 'água',
@@ -118,6 +173,26 @@ export default function App() {
       classification: 'fixa',
       description: ''
     });
+    setBulkExpenses([{
+      type: 'água',
+      dueDate: format(new Date(), 'yyyy-MM-dd'),
+      status: 'neutro',
+      classification: 'fixa',
+    }]);
+  };
+
+  const openEdit = (expense: Expense) => {
+    setEditingExpense(expense);
+    setFormData({
+      condominium: expense.condominium,
+      type: expense.type,
+      dueDate: expense.dueDate,
+      status: expense.status,
+      classification: expense.classification,
+      description: expense.description || ''
+    });
+    setFormTab('single');
+    setShowForm(true);
   };
 
   const toggleStatus = async (expense: Expense) => {
@@ -150,8 +225,32 @@ export default function App() {
   const prevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
 
   const filteredExpenses = useMemo(() => {
-    const start = startOfMonth(currentDate);
-    const end = endOfMonth(currentDate);
+    let start: Date;
+    let end: Date;
+
+    if (viewMode === 'monthly') {
+      start = startOfMonth(currentDate);
+      end = endOfMonth(currentDate);
+    } else if (viewMode === 'annual') {
+      start = startOfYear(currentDate);
+      end = endOfYear(currentDate);
+    } else {
+      start = parseISO(customRange.start);
+      end = parseISO(customRange.end);
+    }
+
+    const today = new Date();
+    if (quickFilter === 'today') {
+      start = startOfDay(today);
+      end = endOfDay(today);
+    } else if (quickFilter === 'week') {
+      start = startOfWeek(today, { locale: ptBR });
+      end = endOfWeek(today, { locale: ptBR });
+    } else if (quickFilter === 'month') {
+      start = startOfMonth(today);
+      end = endOfMonth(today);
+    }
+
     const currentMonthStr = format(currentDate, 'yyyy-MM');
 
     return expenses.flatMap(e => {
@@ -163,27 +262,34 @@ export default function App() {
         }
         return [];
       } else {
-        // Fixed expense: Show if it started in this month or before
-        if (expenseDate <= end) {
-          const isPaidThisMonth = e.paidMonths?.includes(currentMonthStr);
-          
-          // Project the due date to the current month for display/overdue logic
-          const displayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), expenseDate.getDate());
-          
-          return [{
-            ...e,
-            status: isPaidThisMonth ? 'efetivado' : 'neutro',
-            dueDate: format(displayDate, 'yyyy-MM-dd')
-          }];
+        // Fixed expense: Logic to show in the selected range
+        // We need to find all occurrences of this fixed expense within [start, end]
+        const occurrences: Expense[] = [];
+        let tempDate = new Date(expenseDate.getFullYear(), expenseDate.getMonth(), expenseDate.getDate());
+        
+        // Safety break to prevent infinite loops
+        let iterations = 0;
+        while (tempDate <= end && iterations < 24) {
+          if (tempDate >= start) {
+            const monthStr = format(tempDate, 'yyyy-MM');
+            const isPaid = e.paidMonths?.includes(monthStr);
+            occurrences.push({
+              ...e,
+              status: isPaid ? 'efetivado' : 'neutro',
+              dueDate: format(tempDate, 'yyyy-MM-dd')
+            });
+          }
+          tempDate = addMonths(tempDate, 1);
+          iterations++;
         }
-        return [];
+        return occurrences;
       }
     }).filter(e => {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
     });
-  }, [expenses, filterStatus, searchTerm, currentDate]);
+  }, [expenses, filterStatus, searchTerm, currentDate, viewMode, customRange, quickFilter]);
 
   const chartData = useMemo(() => {
     let lançadas = 0;
@@ -260,34 +366,129 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Month Navigation */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
-          <div>
-            <h2 className="text-3xl font-light text-zinc-500">
-              Despesas com <span className="font-bold text-zinc-900">Vencimento em {format(currentDate, "MMM/yyyy", { locale: ptBR })}</span>
-            </h2>
-            <div className="flex items-center gap-2 mt-2 text-sm text-zinc-400 font-medium uppercase tracking-wider">
-              <Filter className="w-3.5 h-3.5" />
-              Status: {filterStatus === 'all' ? 'Todas' : filterStatus === 'efetivado' ? 'Lançadas' : 'Neutras'}
-            </div>
+        {/* Period Selector Tabs */}
+        <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm mb-8 overflow-hidden">
+          <div className="flex border-b border-zinc-100">
+            {(['period', 'monthly', 'annual'] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => {
+                  setViewMode(mode);
+                  setQuickFilter('none');
+                }}
+                className={cn(
+                  "px-6 py-4 text-sm font-bold transition-all border-b-2",
+                  viewMode === mode 
+                    ? "border-primary text-primary bg-primary/5" 
+                    : "border-transparent text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
+                )}
+              >
+                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : 'Anual'}
+              </button>
+            ))}
           </div>
+          
+          <div className="p-6 bg-zinc-50/50">
+            {viewMode === 'monthly' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div>
+                  <h2 className="text-2xl font-light text-zinc-500">
+                    Vencimento em <span className="font-bold text-zinc-900">{format(currentDate, "MMMM 'de' yyyy", { locale: ptBR })}</span>
+                  </h2>
+                </div>
+                <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+                  <button onClick={prevMonth} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                    <ChevronLeft className="w-4 h-4" />
+                    {format(subMonths(currentDate, 1), "MMM/yy", { locale: ptBR })}
+                  </button>
+                  <div className="w-px h-6 bg-zinc-200 mx-1" />
+                  <button onClick={nextMonth} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                    {format(addMonths(currentDate, 1), "MMM/yy", { locale: ptBR })}
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
 
-          <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
-            <button 
-              onClick={prevMonth}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              {format(subMonths(currentDate, 1), "MMM/yyyy", { locale: ptBR })}
-            </button>
-            <div className="w-px h-6 bg-zinc-200 mx-1" />
-            <button 
-              onClick={nextMonth}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm"
-            >
-              {format(addMonths(currentDate, 1), "MMM/yyyy", { locale: ptBR })}
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            {viewMode === 'annual' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div>
+                  <h2 className="text-2xl font-light text-zinc-500">
+                    Vencimentos no Ano de <span className="font-bold text-zinc-900">{format(currentDate, "yyyy")}</span>
+                  </h2>
+                </div>
+                <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+                  <button onClick={() => setCurrentDate(prev => subMonths(prev, 12))} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                    <ChevronLeft className="w-4 h-4" />
+                    {currentDate.getFullYear() - 1}
+                  </button>
+                  <div className="w-px h-6 bg-zinc-200 mx-1" />
+                  <button onClick={() => setCurrentDate(prev => addMonths(prev, 12))} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                    {currentDate.getFullYear() + 1}
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {viewMode === 'period' && (
+              <div className="flex flex-col md:flex-row items-end gap-4">
+                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Data Inicial</label>
+                    <input 
+                      type="date" 
+                      value={customRange.start}
+                      onChange={(e) => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
+                      className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm focus:ring-2 focus:ring-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Data Final</label>
+                    <input 
+                      type="date" 
+                      value={customRange.end}
+                      onChange={(e) => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
+                      className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm focus:ring-2 focus:ring-primary outline-none"
+                    />
+                  </div>
+                </div>
+                <button className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-primary-hover transition-all shadow-lg shadow-primary/20">
+                  Aplicar
+                </button>
+              </div>
+            )}
+
+            {/* Quick Filters */}
+            <div className="flex flex-wrap items-center gap-3 mt-6 pt-6 border-t border-zinc-100">
+              <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest mr-2">Vencimentos Próximos:</span>
+              {[
+                { id: 'today', label: 'Vence hoje' },
+                { id: 'week', label: 'Vence essa semana' },
+                { id: 'month', label: 'Vence esse mês' }
+              ].map((filter) => (
+                <button
+                  key={filter.id}
+                  onClick={() => setQuickFilter(quickFilter === filter.id ? 'none' : filter.id as any)}
+                  className={cn(
+                    "px-4 py-1.5 rounded-full text-xs font-bold transition-all border",
+                    quickFilter === filter.id 
+                      ? "bg-primary border-primary text-white shadow-md shadow-primary/20" 
+                      : "bg-white border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                  )}
+                >
+                  {filter.label}
+                </button>
+              ))}
+              {quickFilter !== 'none' && (
+                <button 
+                  onClick={() => setQuickFilter('none')}
+                  className="text-xs text-rose-500 font-bold hover:underline ml-2"
+                >
+                  Limpar Filtro
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -464,6 +665,12 @@ export default function App() {
                                 )}
                               </button>
                               <button 
+                                onClick={() => openEdit(expense)}
+                                className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button 
                                 onClick={() => deleteExpense(expense.id)}
                                 className="p-2 text-zinc-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
                               >
@@ -505,10 +712,10 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl border border-zinc-200"
+              className="relative bg-white w-full max-w-2xl p-8 rounded-3xl shadow-2xl border border-zinc-200 overflow-y-auto max-h-[90vh]"
             >
               <button 
-                onClick={() => setShowForm(false)}
+                onClick={closeForm}
                 className="absolute top-6 right-6 p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-full transition-all"
               >
                 <X className="w-5 h-5" />
@@ -516,16 +723,45 @@ export default function App() {
 
               <div className="flex items-center gap-3 mb-8">
                 <div className="bg-primary/10 p-2.5 rounded-xl">
-                  <Plus className="text-primary w-6 h-6" />
+                  {editingExpense ? <Edit2 className="text-primary w-6 h-6" /> : <Plus className="text-primary w-6 h-6" />}
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold tracking-tight">Novo Lançamento</h2>
-                  <p className="text-zinc-500 text-sm">Preencha os dados abaixo</p>
+                  <h2 className="text-2xl font-bold tracking-tight">
+                    {editingExpense ? 'Editar Lançamento' : 'Novo Lançamento'}
+                  </h2>
+                  <p className="text-zinc-500 text-sm">
+                    {editingExpense ? 'Altere os dados da despesa' : 'Preencha os dados abaixo'}
+                  </p>
                 </div>
               </div>
 
+              {!editingExpense && (
+                <div className="flex gap-2 mb-6 p-1 bg-zinc-100 rounded-xl w-fit">
+                  <button
+                    onClick={() => setFormTab('single')}
+                    className={cn(
+                      "px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2",
+                      formTab === 'single' ? "bg-white shadow-sm text-primary" : "text-zinc-500"
+                    )}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Único
+                  </button>
+                  <button
+                    onClick={() => setFormTab('multiple')}
+                    className={cn(
+                      "px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2",
+                      formTab === 'multiple' ? "bg-white shadow-sm text-primary" : "text-zinc-500"
+                    )}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    Múltiplos
+                  </button>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-6">
-                <div>
+                <div className="relative">
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Condomínio</label>
                   <input 
                     required
@@ -535,99 +771,211 @@ export default function App() {
                     className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
                     placeholder="Ex: Edifício Solar"
                   />
+                  {condominiumSuggestions.length > 0 && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden">
+                      {condominiumSuggestions.map((suggestion, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setFormData({...formData, condominium: suggestion})}
+                          className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Tipo</label>
-                    <select 
-                      value={formData.type}
-                      onChange={e => setFormData({...formData, type: e.target.value as 'água' | 'luz'})}
-                      className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50 appearance-none"
-                    >
-                      <option value="água">Água</option>
-                      <option value="luz">Luz</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Vencimento</label>
-                    <input 
-                      required
-                      type="date" 
-                      value={formData.dueDate}
-                      onChange={e => setFormData({...formData, dueDate: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50"
-                    />
-                  </div>
-                </div>
+                {formTab === 'single' ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Tipo</label>
+                        <select 
+                          value={formData.type}
+                          onChange={e => setFormData({...formData, type: e.target.value as 'água' | 'luz'})}
+                          className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50 appearance-none"
+                        >
+                          <option value="água">Água</option>
+                          <option value="luz">Luz</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Vencimento</label>
+                        <input 
+                          required
+                          type="date" 
+                          value={formData.dueDate}
+                          onChange={e => setFormData({...formData, dueDate: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50"
+                        />
+                      </div>
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Classificação</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, classification: 'fixa'})}
-                      className={cn(
-                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
-                        formData.classification === 'fixa' 
-                          ? "border-emerald-500 bg-emerald-50 text-emerald-700" 
-                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
-                      )}
-                    >
-                      <Repeat className="w-4 h-4" />
-                      Fixa
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, classification: 'variável'})}
-                      className={cn(
-                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
-                        formData.classification === 'variável' 
-                          ? "border-amber-500 bg-amber-50 text-amber-700" 
-                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
-                      )}
-                    >
-                      <Activity className="w-4 h-4" />
-                      Variável
-                    </button>
-                  </div>
-                </div>
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Classificação</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, classification: 'fixa'})}
+                          className={cn(
+                            "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
+                            formData.classification === 'fixa' 
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-700" 
+                              : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                          )}
+                        >
+                          <Repeat className="w-4 h-4" />
+                          Fixa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, classification: 'variável'})}
+                          className={cn(
+                            "px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2",
+                            formData.classification === 'variável' 
+                              ? "border-amber-500 bg-amber-50 text-amber-700" 
+                              : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                          )}
+                        >
+                          <Activity className="w-4 h-4" />
+                          Variável
+                        </button>
+                      </div>
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Status Inicial</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, status: 'neutro'})}
-                      className={cn(
-                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                        formData.status === 'neutro' 
-                          ? "border-primary bg-primary/5 text-primary" 
-                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
-                      )}
-                    >
-                      Pendente
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, status: 'efetivado'})}
-                      className={cn(
-                        "px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                        formData.status === 'efetivado' 
-                          ? "border-primary bg-primary/5 text-primary" 
-                          : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
-                      )}
-                    >
-                      Lançada
-                    </button>
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Status Inicial</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, status: 'neutro'})}
+                          className={cn(
+                            "px-4 py-3 rounded-xl border text-sm font-medium transition-all",
+                            formData.status === 'neutro' 
+                              ? "border-primary bg-primary/5 text-primary" 
+                              : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                          )}
+                        >
+                          Pendente
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, status: 'efetivado'})}
+                          className={cn(
+                            "px-4 py-3 rounded-xl border text-sm font-medium transition-all",
+                            formData.status === 'efetivado' 
+                              ? "border-primary bg-primary/5 text-primary" 
+                              : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                          )}
+                        >
+                          Lançada
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">Lista de Despesas</label>
+                      <button 
+                        type="button"
+                        onClick={() => setBulkExpenses([...bulkExpenses, {
+                          type: 'água',
+                          dueDate: format(new Date(), 'yyyy-MM-dd'),
+                          status: 'neutro',
+                          classification: 'fixa',
+                        }])}
+                        className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" /> Adicionar Outra
+                      </button>
+                    </div>
+                    
+                    {bulkExpenses.map((be, idx) => (
+                      <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-200 relative group/bulk">
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Tipo</label>
+                            <select 
+                              value={be.type}
+                              onChange={e => {
+                                const newBulk = [...bulkExpenses];
+                                newBulk[idx].type = e.target.value as any;
+                                setBulkExpenses(newBulk);
+                              }}
+                              className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none"
+                            >
+                              <option value="água">Água</option>
+                              <option value="luz">Luz</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Vencimento</label>
+                            <input 
+                              type="date" 
+                              value={be.dueDate}
+                              onChange={e => {
+                                const newBulk = [...bulkExpenses];
+                                newBulk[idx].dueDate = e.target.value;
+                                setBulkExpenses(newBulk);
+                              }}
+                              className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newBulk = [...bulkExpenses];
+                                newBulk[idx].classification = newBulk[idx].classification === 'fixa' ? 'variável' : 'fixa';
+                                setBulkExpenses(newBulk);
+                              }}
+                              className={cn(
+                                "flex-1 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all",
+                                be.classification === 'fixa' ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-amber-500 bg-amber-50 text-amber-700"
+                              )}
+                            >
+                              {be.classification}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newBulk = [...bulkExpenses];
+                                newBulk[idx].status = newBulk[idx].status === 'efetivado' ? 'neutro' : 'efetivado';
+                                setBulkExpenses(newBulk);
+                              }}
+                              className={cn(
+                                "flex-1 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all",
+                                be.status === 'efetivado' ? "border-primary bg-primary/5 text-primary" : "border-zinc-200 text-zinc-500"
+                              )}
+                            >
+                              {be.status === 'efetivado' ? 'Lançada' : 'Pendente'}
+                            </button>
+                          </div>
+                          {bulkExpenses.length > 1 && (
+                            <button 
+                              type="button"
+                              onClick={() => setBulkExpenses(bulkExpenses.filter((_, i) => i !== idx))}
+                              className="p-2 text-zinc-400 hover:text-rose-500 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                )}
 
                 <button 
                   type="submit"
                   className="w-full bg-primary text-white py-4 rounded-2xl font-bold hover:bg-primary-hover transition-all shadow-xl shadow-primary/30 mt-4 active:scale-[0.98]"
                 >
-                  Salvar Lançamento
+                  {editingExpense ? 'Salvar Alterações' : 'Salvar Lançamento(s)'}
                 </button>
               </form>
             </motion.div>
