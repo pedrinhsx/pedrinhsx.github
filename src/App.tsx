@@ -19,7 +19,9 @@ import {
   Repeat,
   Activity,
   Edit2,
-  Layers
+  Layers,
+  SortAsc,
+  ArrowDownAz
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -72,6 +74,7 @@ export default function App() {
     end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
   });
   const [quickFilter, setQuickFilter] = useState<'none' | 'today' | 'week' | 'month'>('none');
+  const [sortBy, setSortBy] = useState<'dueDate' | 'alphabetical'>('dueDate');
   
   // Form state
   const [formData, setFormData] = useState({
@@ -303,8 +306,14 @@ export default function App() {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
+    }).sort((a, b) => {
+      if (sortBy === 'dueDate') {
+        return parseISO(a.dueDate).getTime() - parseISO(b.dueDate).getTime();
+      } else {
+        return a.condominium.localeCompare(b.condominium);
+      }
     });
-  }, [expenses, filterStatus, searchTerm, currentDate, viewMode, customRange, quickFilter]);
+  }, [expenses, filterStatus, searchTerm, currentDate, viewMode, customRange, quickFilter, sortBy]);
 
   const chartData = useMemo(() => {
     let lançadas = 0;
@@ -598,6 +607,31 @@ export default function App() {
               <div className="px-6 py-4 border-b border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <h2 className="font-semibold text-lg">Lançamentos</h2>
                 
+                <div className="flex items-center gap-2 bg-zinc-100 p-1 rounded-lg">
+                  <button
+                    onClick={() => setSortBy('dueDate')}
+                    className={cn(
+                      "px-2 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1",
+                      sortBy === 'dueDate' ? "bg-white shadow-sm text-primary font-bold" : "text-zinc-500 hover:text-zinc-700"
+                    )}
+                    title="Ordenar por Vencimento"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Vencimento</span>
+                  </button>
+                  <button
+                    onClick={() => setSortBy('alphabetical')}
+                    className={cn(
+                      "px-2 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1",
+                      sortBy === 'alphabetical' ? "bg-white shadow-sm text-primary font-bold" : "text-zinc-500 hover:text-zinc-700"
+                    )}
+                    title="Ordenar Alfabeticamente"
+                  >
+                    <ArrowDownAz className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">A-Z</span>
+                  </button>
+                </div>
+
                 <div className="relative flex-1 max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                   <input 
