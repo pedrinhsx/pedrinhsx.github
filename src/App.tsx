@@ -23,7 +23,9 @@ import {
   SortAsc,
   ArrowDownAz,
   Wifi,
-  Flame
+  Flame,
+  Building,
+  Copy
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -47,11 +49,13 @@ function cn(...inputs: ClassValue[]) {
 interface Expense {
   id: number;
   condominium: string;
+  supplier?: string;
   type: 'água' | 'luz' | 'internet' | 'gás';
   dueDate: string;
-  status: 'efetivado' | 'neutro';
+  status: 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado';
   classification: 'fixa' | 'variável';
   paidMonths?: string[];
+  statusByMonth?: { [month: string]: 'efetivado' | 'sem_fatura' | 'zerado' | 'neutro' };
   description?: string;
 }
 
@@ -64,7 +68,7 @@ const COLORS = {
 export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado'>('all');
   const [filterType, setFilterType] = useState<'all' | 'água' | 'luz' | 'internet' | 'gás'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -82,18 +86,20 @@ export default function App() {
   // Form state
   const [formData, setFormData] = useState({
     condominium: '',
+    supplier: '',
     type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
-    status: 'neutro' as 'efetivado' | 'neutro',
+    status: 'neutro' as 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado',
     classification: 'fixa' as 'fixa' | 'variável',
     description: ''
   });
 
   const [bulkExpenses, setBulkExpenses] = useState([{
     condominium: '',
+    supplier: '',
     type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
-    status: 'neutro' as 'efetivado' | 'neutro',
+    status: 'neutro' as 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado',
     classification: 'fixa' as 'fixa' | 'variável',
     description: ''
   }]);
@@ -110,7 +116,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<{type: 'single' | 'bulk', index?: number} | null>(null);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<{type: 'single' | 'bulk', field: 'condo' | 'supplier', index?: number} | null>(null);
 
   const getCondoSuggestions = (input: string) => {
     const uniqueCondos = Array.from(new Set<string>(expenses.map(e => e.condominium))).filter(Boolean);
@@ -118,6 +124,15 @@ export default function App() {
     return uniqueCondos.filter(c => 
       c.toLowerCase().includes(input.toLowerCase()) &&
       c.toLowerCase() !== input.toLowerCase()
+    ).slice(0, 5);
+  };
+
+  const getSupplierSuggestions = (input: string) => {
+    const uniqueSuppliers = Array.from(new Set<string>(expenses.map(e => e.supplier || ''))).filter(Boolean);
+    if (!input) return uniqueSuppliers.slice(0, 5);
+    return uniqueSuppliers.filter(s => 
+      s.toLowerCase().includes(input.toLowerCase()) &&
+      s.toLowerCase() !== input.toLowerCase()
     ).slice(0, 5);
   };
 
@@ -185,6 +200,7 @@ export default function App() {
     setFormTab('single');
     setFormData({
       condominium: '',
+      supplier: '',
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
@@ -193,6 +209,7 @@ export default function App() {
     });
     setBulkExpenses([{
       condominium: '',
+      supplier: '',
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
@@ -206,6 +223,7 @@ export default function App() {
     setEditingExpense(expense);
     setFormData({
       condominium: expense.condominium,
+      supplier: expense.supplier || '',
       type: expense.type,
       dueDate: expense.dueDate,
       status: expense.status,
@@ -216,21 +234,57 @@ export default function App() {
     setShowForm(true);
   };
 
+  const duplicateToBulk = (expense: Expense) => {
+    setBulkExpenses([{
+      condominium: expense.condominium,
+      supplier: expense.supplier || '',
+      type: expense.type,
+      dueDate: expense.dueDate,
+      status: 'neutro',
+      classification: expense.classification,
+      description: expense.description || ''
+    }]);
+    setFormTab('multiple');
+    setShowForm(true);
+  };
+
   const toggleStatus = async (expense: Expense) => {
     const currentMonthStr = format(currentDate, 'yyyy-MM');
     
     const updatedExpenses = expenses.map(e => {
       if (e.id !== expense.id) return e;
       
+      const getNextStatus = (current: Expense['status'], type: Expense['type']): Expense['status'] => {
+        if (current === 'neutro') return 'efetivado';
+        if (current === 'efetivado') {
+          if (type === 'internet') return 'sem_fatura';
+          if (type === 'gás') return 'zerado';
+          return 'neutro';
+        }
+        return 'neutro';
+      };
+
       if (e.classification === 'variável') {
-        return { ...e, status: e.status === 'efetivado' ? 'neutro' : 'efetivado' } as Expense;
+        return { ...e, status: getNextStatus(e.status, e.type) } as Expense;
       } else {
-        const paidMonths = e.paidMonths || [];
-        const isPaid = paidMonths.includes(currentMonthStr);
-        const newPaidMonths = isPaid 
-          ? paidMonths.filter(m => m !== currentMonthStr)
-          : [...paidMonths, currentMonthStr];
-        return { ...e, paidMonths: newPaidMonths } as Expense;
+        const statusByMonth = e.statusByMonth || {};
+        let currentStatus = statusByMonth[currentMonthStr];
+        if (!currentStatus && e.paidMonths?.includes(currentMonthStr)) {
+          currentStatus = 'efetivado';
+        }
+        if (!currentStatus) currentStatus = 'neutro';
+
+        const nextStatus = getNextStatus(currentStatus as any, e.type);
+        const newStatusByMonth = { ...statusByMonth, [currentMonthStr]: nextStatus };
+        
+        let newPaidMonths = e.paidMonths || [];
+        if (nextStatus === 'efetivado') {
+          if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
+        } else {
+          newPaidMonths = newPaidMonths.filter(m => m !== currentMonthStr);
+        }
+
+        return { ...e, statusByMonth: newStatusByMonth, paidMonths: newPaidMonths } as Expense;
       }
     });
     saveToLocalStorage(updatedExpenses);
@@ -293,10 +347,16 @@ export default function App() {
         while (tempDate <= end && iterations < 24) {
           if (tempDate >= start) {
             const monthStr = format(tempDate, 'yyyy-MM');
-            const isPaid = e.paidMonths?.includes(monthStr);
+            const statusByMonth = e.statusByMonth || {};
+            let currentStatus = statusByMonth[monthStr];
+            if (!currentStatus && e.paidMonths?.includes(monthStr)) {
+              currentStatus = 'efetivado';
+            }
+            if (!currentStatus) currentStatus = 'neutro';
+
             occurrences.push({
               ...e,
-              status: isPaid ? 'efetivado' : 'neutro',
+              status: currentStatus as any,
               dueDate: format(tempDate, 'yyyy-MM-dd')
             });
           }
@@ -325,7 +385,7 @@ export default function App() {
     let vencidas = 0;
 
     filteredExpenses.forEach(e => {
-      if (e.status === 'efetivado') {
+      if (e.status === 'efetivado' || e.status === 'sem_fatura' || e.status === 'zerado') {
         lançadas++;
       } else {
         const date = parseISO(e.dueDate);
@@ -349,7 +409,7 @@ export default function App() {
 
   const stats = useMemo(() => {
     const totalCount = filteredExpenses.length;
-    const effectiveCount = filteredExpenses.filter(e => e.status === 'efetivado').length;
+    const effectiveCount = filteredExpenses.filter(e => e.status === 'efetivado' || e.status === 'sem_fatura' || e.status === 'zerado').length;
     const overdueCount = filteredExpenses.filter(e => e.status === 'neutro' && isPast(parseISO(e.dueDate)) && !isToday(parseISO(e.dueDate))).length;
     const pendingCount = filteredExpenses.filter(e => e.status === 'neutro' && (!isPast(parseISO(e.dueDate)) || isToday(parseISO(e.dueDate)))).length;
 
@@ -726,6 +786,12 @@ export default function App() {
                                   {format(parseISO(expense.dueDate), "dd/MM/yy")}
                                 </span>
                                 <span className="capitalize">{expense.type}</span>
+                                {expense.supplier && (
+                                  <span className="flex items-center gap-1">
+                                    <Building className="w-3.5 h-3.5" />
+                                    {expense.supplier}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -736,29 +802,43 @@ export default function App() {
                                 onClick={() => toggleStatus(expense)}
                                 className={cn(
                                   "flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all",
-                                  expense.status === 'efetivado' 
-                                    ? "bg-primary/10 text-primary" 
-                                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                                  expense.status === 'efetivado' ? "bg-primary/10 text-primary" : 
+                                  expense.status === 'sem_fatura' ? "bg-indigo-100 text-indigo-700" :
+                                  expense.status === 'zerado' ? "bg-orange-100 text-orange-700" :
+                                  "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
                                 )}
                               >
                                 {expense.status === 'efetivado' ? (
                                   <><CheckCircle2 className="w-3.5 h-3.5" /> Lançada</>
+                                ) : expense.status === 'sem_fatura' ? (
+                                  <><X className="w-3.5 h-3.5" /> Sem Fatura</>
+                                ) : expense.status === 'zerado' ? (
+                                  <><Droplets className="w-3.5 h-3.5" /> Zerado</>
                                 ) : (
                                   <><Circle className="w-3.5 h-3.5" /> Marcar Lançada</>
                                 )}
                               </button>
-                              <button 
-                                onClick={() => openEdit(expense)}
-                                className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button 
-                                onClick={() => deleteExpense(expense.id)}
-                                className="p-2 text-zinc-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                                <button 
+                                  onClick={() => openEdit(expense)}
+                                  className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  title="Editar"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => duplicateToBulk(expense)}
+                                  className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  title="Adicionar múltiplos deste fornecedor"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => deleteExpense(expense.id)}
+                                  className="p-2 text-zinc-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  title="Excluir"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                             </div>
                           </div>
                         </div>
@@ -845,6 +925,7 @@ export default function App() {
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 {formTab === 'single' && (
+                  <>
                     <div className="relative w-full">
                       <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Condomínio</label>
                       <input 
@@ -853,13 +934,13 @@ export default function App() {
                         value={formData.condominium}
                         onChange={e => {
                           setFormData({...formData, condominium: e.target.value});
-                          setActiveSuggestionIdx({ type: 'single' });
+                          setActiveSuggestionIdx({ type: 'single', field: 'condo' });
                         }}
-                        onFocus={() => setActiveSuggestionIdx({ type: 'single' })}
+                        onFocus={() => setActiveSuggestionIdx({ type: 'single', field: 'condo' })}
                         className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
                         placeholder="Ex: Edifício Solar"
                       />
-                      {activeSuggestionIdx?.type === 'single' && getCondoSuggestions(formData.condominium).length > 0 && (
+                      {activeSuggestionIdx?.type === 'single' && activeSuggestionIdx?.field === 'condo' && getCondoSuggestions(formData.condominium).length > 0 && (
                         <div 
                           ref={suggestionRef}
                           className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto"
@@ -880,6 +961,42 @@ export default function App() {
                         </div>
                       )}
                     </div>
+
+                    <div className="relative w-full">
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Fornecedor</label>
+                      <input 
+                        type="text" 
+                        value={formData.supplier}
+                        onChange={e => {
+                          setFormData({...formData, supplier: e.target.value});
+                          setActiveSuggestionIdx({ type: 'single', field: 'supplier' });
+                        }}
+                        onFocus={() => setActiveSuggestionIdx({ type: 'single', field: 'supplier' })}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
+                        placeholder="Ex: Sabesp, Enel, Vivo..."
+                      />
+                      {activeSuggestionIdx?.type === 'single' && activeSuggestionIdx?.field === 'supplier' && getSupplierSuggestions(formData.supplier).length > 0 && (
+                        <div 
+                          ref={suggestionRef}
+                          className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto"
+                        >
+                          {getSupplierSuggestions(formData.supplier).map((suggestion, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => {
+                                setFormData({...formData, supplier: suggestion});
+                                setActiveSuggestionIdx(null);
+                              }}
+                              className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                            >
+                              {suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
                 
                 {formTab === 'single' ? (
@@ -969,6 +1086,34 @@ export default function App() {
                         >
                           Lançada
                         </button>
+                        {formData.type === 'internet' && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({...formData, status: 'sem_fatura'})}
+                            className={cn(
+                              "px-4 py-3 rounded-xl border text-sm font-medium transition-all col-span-2",
+                              formData.status === 'sem_fatura' 
+                                ? "border-indigo-500 bg-indigo-50 text-indigo-700" 
+                                : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                            )}
+                          >
+                            Sem Fatura
+                          </button>
+                        )}
+                        {formData.type === 'gás' && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({...formData, status: 'zerado'})}
+                            className={cn(
+                              "px-4 py-3 rounded-xl border text-sm font-medium transition-all col-span-2",
+                              formData.status === 'zerado' 
+                                ? "border-orange-500 bg-orange-50 text-orange-700" 
+                                : "border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                            )}
+                          >
+                            Zerado
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1015,13 +1160,13 @@ export default function App() {
                               const newBulk = [...bulkExpenses];
                               newBulk[idx].condominium = e.target.value;
                               setBulkExpenses(newBulk);
-                              setActiveSuggestionIdx({ type: 'bulk', index: idx });
+                              setActiveSuggestionIdx({ type: 'bulk', field: 'condo', index: idx });
                             }}
-                            onFocus={() => setActiveSuggestionIdx({ type: 'bulk', index: idx })}
+                            onFocus={() => setActiveSuggestionIdx({ type: 'bulk', field: 'condo', index: idx })}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none bg-white"
                             placeholder="Nome do condomínio"
                           />
-                          {activeSuggestionIdx?.type === 'bulk' && activeSuggestionIdx.index === idx && getCondoSuggestions(be.condominium).length > 0 && (
+                          {activeSuggestionIdx?.type === 'bulk' && activeSuggestionIdx.field === 'condo' && activeSuggestionIdx.index === idx && getCondoSuggestions(be.condominium).length > 0 && (
                             <div 
                               ref={suggestionRef}
                               className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-40 overflow-y-auto"
@@ -1033,6 +1178,45 @@ export default function App() {
                                   onClick={() => {
                                     const newBulk = [...bulkExpenses];
                                     newBulk[idx].condominium = suggestion;
+                                    setBulkExpenses(newBulk);
+                                    setActiveSuggestionIdx(null);
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                                >
+                                  {suggestion}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="relative mb-4">
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Fornecedor</label>
+                          <input 
+                            type="text" 
+                            value={be.supplier}
+                            onChange={e => {
+                              const newBulk = [...bulkExpenses];
+                              newBulk[idx].supplier = e.target.value;
+                              setBulkExpenses(newBulk);
+                              setActiveSuggestionIdx({ type: 'bulk', field: 'supplier', index: idx });
+                            }}
+                            onFocus={() => setActiveSuggestionIdx({ type: 'bulk', field: 'supplier', index: idx })}
+                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none bg-white"
+                            placeholder="Nome do fornecedor"
+                          />
+                          {activeSuggestionIdx?.type === 'bulk' && activeSuggestionIdx.field === 'supplier' && activeSuggestionIdx.index === idx && getSupplierSuggestions(be.supplier).length > 0 && (
+                            <div 
+                              ref={suggestionRef}
+                              className="absolute z-20 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-40 overflow-y-auto"
+                            >
+                              {getSupplierSuggestions(be.supplier).map((suggestion, i) => (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => {
+                                    const newBulk = [...bulkExpenses];
+                                    newBulk[idx].supplier = suggestion;
                                     setBulkExpenses(newBulk);
                                     setActiveSuggestionIdx(null);
                                   }}
@@ -1097,15 +1281,30 @@ export default function App() {
                               type="button"
                               onClick={() => {
                                 const newBulk = [...bulkExpenses];
-                                newBulk[idx].status = newBulk[idx].status === 'efetivado' ? 'neutro' : 'efetivado';
+                                const getNextStatus = (current: Expense['status'], type: Expense['type']): Expense['status'] => {
+                                  if (current === 'neutro') return 'efetivado';
+                                  if (current === 'efetivado') {
+                                    if (type === 'internet') return 'sem_fatura';
+                                    if (type === 'gás') return 'zerado';
+                                    return 'neutro';
+                                  }
+                                  return 'neutro';
+                                };
+                                newBulk[idx].status = getNextStatus(newBulk[idx].status, newBulk[idx].type);
                                 setBulkExpenses(newBulk);
                               }}
                               className={cn(
                                 "flex-1 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all",
-                                be.status === 'efetivado' ? "border-primary bg-primary/5 text-primary" : "border-zinc-200 text-zinc-500"
+                                be.status === 'efetivado' ? "border-primary bg-primary/5 text-primary" : 
+                                be.status === 'sem_fatura' ? "border-indigo-500 bg-indigo-50 text-indigo-700" :
+                                be.status === 'zerado' ? "border-orange-500 bg-orange-50 text-orange-700" :
+                                "border-zinc-200 text-zinc-500"
                               )}
                             >
-                              {be.status === 'efetivado' ? 'Lançada' : 'Pendente'}
+                              {be.status === 'efetivado' ? 'Lançada' : 
+                               be.status === 'sem_fatura' ? 'Sem Fatura' :
+                               be.status === 'zerado' ? 'Zerado' :
+                               'Pendente'}
                             </button>
                           </div>
                           <div className="flex items-center gap-2">
