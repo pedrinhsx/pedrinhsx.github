@@ -21,7 +21,9 @@ import {
   Edit2,
   Layers,
   SortAsc,
-  ArrowDownAz
+  ArrowDownAz,
+  Wifi,
+  Flame
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -45,7 +47,7 @@ function cn(...inputs: ClassValue[]) {
 interface Expense {
   id: number;
   condominium: string;
-  type: 'água' | 'luz';
+  type: 'água' | 'luz' | 'internet' | 'gás';
   dueDate: string;
   status: 'efetivado' | 'neutro';
   classification: 'fixa' | 'variável';
@@ -63,6 +65,7 @@ export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'água' | 'luz' | 'internet' | 'gás'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
@@ -79,7 +82,7 @@ export default function App() {
   // Form state
   const [formData, setFormData] = useState({
     condominium: '',
-    type: 'água' as 'água' | 'luz',
+    type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro',
     classification: 'fixa' as 'fixa' | 'variável',
@@ -88,7 +91,7 @@ export default function App() {
 
   const [bulkExpenses, setBulkExpenses] = useState([{
     condominium: '',
-    type: 'água' as 'água' | 'luz',
+    type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro',
     classification: 'fixa' as 'fixa' | 'variável',
@@ -304,8 +307,9 @@ export default function App() {
       }
     }).filter(e => {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
+      const matchesType = filterType === 'all' || e.type === filterType;
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesStatus && matchesSearch;
+      return matchesStatus && matchesType && matchesSearch;
     }).sort((a, b) => {
       if (sortBy === 'dueDate') {
         return parseISO(a.dueDate).getTime() - parseISO(b.dueDate).getTime();
@@ -313,7 +317,7 @@ export default function App() {
         return a.condominium.localeCompare(b.condominium);
       }
     });
-  }, [expenses, filterStatus, searchTerm, currentDate, viewMode, customRange, quickFilter, sortBy]);
+  }, [expenses, filterStatus, filterType, searchTerm, currentDate, viewMode, customRange, quickFilter, sortBy]);
 
   const chartData = useMemo(() => {
     let lançadas = 0;
@@ -607,6 +611,30 @@ export default function App() {
               <div className="px-6 py-4 border-b border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <h2 className="font-semibold text-lg">Lançamentos</h2>
                 
+                <div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
+                  {[
+                    { id: 'all', label: 'Todos', icon: Layers },
+                    { id: 'água', label: 'Água', icon: Droplets },
+                    { id: 'luz', label: 'Luz', icon: Zap },
+                    { id: 'internet', label: 'Internet', icon: Wifi },
+                    { id: 'gás', label: 'Gás', icon: Flame },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setFilterType(tab.id as any)}
+                      className={cn(
+                        "px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap",
+                        filterType === tab.id 
+                          ? "bg-white text-primary shadow-sm" 
+                          : "text-zinc-500 hover:bg-zinc-200/50"
+                      )}
+                    >
+                      <tab.icon className="w-3 h-3" />
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="flex items-center gap-2 bg-zinc-100 p-1 rounded-lg">
                   <button
                     onClick={() => setSortBy('dueDate')}
@@ -666,9 +694,15 @@ export default function App() {
                           <div className="flex items-start gap-4">
                             <div className={cn(
                               "p-3 rounded-2xl",
-                              expense.type === 'água' ? "bg-blue-50 text-blue-600" : "bg-yellow-50 text-yellow-600"
+                              expense.type === 'água' ? "bg-blue-50 text-blue-600" : 
+                              expense.type === 'luz' ? "bg-yellow-50 text-yellow-600" :
+                              expense.type === 'internet' ? "bg-indigo-50 text-indigo-600" :
+                              "bg-orange-50 text-orange-600"
                             )}>
-                              {expense.type === 'água' ? <Droplets className="w-6 h-6" /> : <Zap className="w-6 h-6" />}
+                              {expense.type === 'água' ? <Droplets className="w-6 h-6" /> : 
+                               expense.type === 'luz' ? <Zap className="w-6 h-6" /> :
+                               expense.type === 'internet' ? <Wifi className="w-6 h-6" /> :
+                               <Flame className="w-6 h-6" />}
                             </div>
                             <div>
                               <div className="flex items-center gap-2 mb-1">
@@ -855,11 +889,13 @@ export default function App() {
                         <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Tipo</label>
                         <select 
                           value={formData.type}
-                          onChange={e => setFormData({...formData, type: e.target.value as 'água' | 'luz'})}
+                          onChange={e => setFormData({...formData, type: e.target.value as any})}
                           className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary outline-none bg-zinc-50/50 appearance-none"
                         >
                           <option value="água">Água</option>
                           <option value="luz">Luz</option>
+                          <option value="internet">Internet</option>
+                          <option value="gás">Gás</option>
                         </select>
                       </div>
                       <div>
@@ -1023,6 +1059,8 @@ export default function App() {
                             >
                               <option value="água">Água</option>
                               <option value="luz">Luz</option>
+                              <option value="internet">Internet</option>
+                              <option value="gás">Gás</option>
                             </select>
                           </div>
                           <div>
