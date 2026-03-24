@@ -25,7 +25,8 @@ import {
   Wifi,
   Flame,
   Building,
-  Copy
+  Copy,
+  Settings
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -76,13 +77,15 @@ export default function App() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [formTab, setFormTab] = useState<'single' | 'multiple'>('single');
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual'>('monthly');
+  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual' | 'settings'>('monthly');
   const [customRange, setCustomRange] = useState({
     start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
     end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
   });
   const [quickFilter, setQuickFilter] = useState<'none' | 'today' | 'week' | 'month'>('none');
   const [sortBy, setSortBy] = useState<'dueDate' | 'alphabetical'>('dueDate');
+  const [supplierMappings, setSupplierMappings] = useState<{[supplier: string]: 'água' | 'luz' | 'internet' | 'gás'}>({});
+  const [newMapping, setNewMapping] = useState({ supplier: '', type: 'água' as 'água' | 'luz' | 'internet' | 'gás' });
   
   // Form state
   const [formData, setFormData] = useState({
@@ -138,6 +141,8 @@ export default function App() {
 
   useEffect(() => {
     const saved = localStorage.getItem('condofinance_expenses');
+    const savedMappings = localStorage.getItem('condofinance_mappings');
+    
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -152,8 +157,20 @@ export default function App() {
         console.error('Failed to parse expenses from localStorage', e);
       }
     }
+
+    if (savedMappings) {
+      try {
+        setSupplierMappings(JSON.parse(savedMappings));
+      } catch (e) {
+        console.error('Failed to parse mappings from localStorage', e);
+      }
+    }
     setLoading(false);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('condofinance_mappings', JSON.stringify(supplierMappings));
+  }, [supplierMappings]);
 
   const saveToLocalStorage = (newExpenses: Expense[]) => {
     localStorage.setItem('condofinance_expenses', JSON.stringify(newExpenses));
@@ -491,7 +508,7 @@ export default function App() {
         {/* Period Selector Tabs */}
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm mb-8 overflow-hidden">
           <div className="flex border-b border-zinc-100">
-            {(['period', 'monthly', 'annual'] as const).map((mode) => (
+            {(['period', 'monthly', 'annual', 'settings'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => {
@@ -505,12 +522,97 @@ export default function App() {
                     : "border-transparent text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                 )}
               >
-                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : 'Anual'}
+                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : mode === 'annual' ? 'Anual' : 'Configurações'}
               </button>
             ))}
           </div>
           
           <div className="p-6 bg-zinc-50/50">
+            {viewMode === 'settings' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-zinc-900">Configurações de Fornecedores</h2>
+                  <p className="text-zinc-500">Associe fornecedores a tipos de despesa para preenchimento automático.</p>
+                </div>
+                
+                <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                  <table className="w-full text-left">
+                    <thead className="bg-zinc-50 border-b border-zinc-200">
+                      <tr>
+                        <th className="px-6 py-3 text-xs font-bold text-zinc-400 uppercase tracking-widest">Fornecedor</th>
+                        <th className="px-6 py-3 text-xs font-bold text-zinc-400 uppercase tracking-widest">Tipo de Despesa</th>
+                        <th className="px-6 py-3 text-xs font-bold text-zinc-400 uppercase tracking-widest text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {Object.entries(supplierMappings).map(([supplier, type]) => (
+                        <tr key={supplier}>
+                          <td className="px-6 py-4 text-sm font-medium text-zinc-900">{supplier}</td>
+                          <td className="px-6 py-4 text-sm text-zinc-500 capitalize">{type}</td>
+                          <td className="px-6 py-4 text-right">
+                            <button 
+                              onClick={() => {
+                                const newMappings = { ...supplierMappings };
+                                delete newMappings[supplier];
+                                setSupplierMappings(newMappings);
+                              }}
+                              className="text-rose-500 hover:text-rose-700 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {Object.keys(supplierMappings).length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="px-6 py-12 text-center text-zinc-400 italic">
+                            Nenhuma associação cadastrada.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="bg-zinc-100 p-6 rounded-2xl border border-zinc-200">
+                  <h3 className="font-bold text-zinc-900 mb-4">Nova Associação</h3>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <div className="flex-1">
+                      <input 
+                        type="text" 
+                        placeholder="Nome do fornecedor (ex: Celesc)"
+                        value={newMapping.supplier}
+                        onChange={(e) => setNewMapping(prev => ({ ...prev, supplier: e.target.value }))}
+                        className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm focus:ring-2 focus:ring-primary outline-none"
+                      />
+                    </div>
+                    <div className="w-full sm:w-48">
+                      <select 
+                        value={newMapping.type}
+                        onChange={(e) => setNewMapping(prev => ({ ...prev, type: e.target.value as any }))}
+                        className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm focus:ring-2 focus:ring-primary outline-none"
+                      >
+                        <option value="água">Água</option>
+                        <option value="luz">Luz</option>
+                        <option value="internet">Internet</option>
+                        <option value="gás">Gás</option>
+                      </select>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        if (newMapping.supplier) {
+                          setSupplierMappings(prev => ({ ...prev, [newMapping.supplier]: newMapping.type }));
+                          setNewMapping({ supplier: '', type: 'água' });
+                        }
+                      }}
+                      className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-primary-hover transition-all"
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {viewMode === 'monthly' && (
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
@@ -1083,7 +1185,13 @@ export default function App() {
                         type="text" 
                         value={formData.supplier}
                         onChange={e => {
-                          setFormData({...formData, supplier: e.target.value});
+                          const val = e.target.value;
+                          const mappedType = supplierMappings[val];
+                          setFormData(prev => ({
+                            ...prev, 
+                            supplier: val,
+                            type: mappedType || prev.type
+                          }));
                           setActiveSuggestionIdx({ type: 'single', field: 'supplier' });
                         }}
                         onFocus={() => setActiveSuggestionIdx({ type: 'single', field: 'supplier' })}
@@ -1100,7 +1208,12 @@ export default function App() {
                               key={i}
                               type="button"
                               onClick={() => {
-                                setFormData({...formData, supplier: suggestion});
+                                const mappedType = supplierMappings[suggestion];
+                                setFormData(prev => ({
+                                  ...prev, 
+                                  supplier: suggestion,
+                                  type: mappedType || prev.type
+                                }));
                                 setActiveSuggestionIdx(null);
                               }}
                               className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
@@ -1311,8 +1424,11 @@ export default function App() {
                             type="text" 
                             value={be.supplier}
                             onChange={e => {
+                              const val = e.target.value;
+                              const mappedType = supplierMappings[val];
                               const newBulk = [...bulkExpenses];
-                              newBulk[idx].supplier = e.target.value;
+                              newBulk[idx].supplier = val;
+                              if (mappedType) newBulk[idx].type = mappedType;
                               setBulkExpenses(newBulk);
                               setActiveSuggestionIdx({ type: 'bulk', field: 'supplier', index: idx });
                             }}
@@ -1330,8 +1446,10 @@ export default function App() {
                                   key={i}
                                   type="button"
                                   onClick={() => {
+                                    const mappedType = supplierMappings[suggestion];
                                     const newBulk = [...bulkExpenses];
                                     newBulk[idx].supplier = suggestion;
+                                    if (mappedType) newBulk[idx].type = mappedType;
                                     setBulkExpenses(newBulk);
                                     setActiveSuggestionIdx(null);
                                   }}
