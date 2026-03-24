@@ -70,6 +70,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'all' | 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado'>('all');
   const [filterType, setFilterType] = useState<'all' | 'água' | 'luz' | 'internet' | 'gás'>('all');
+  const [filterSupplier, setFilterSupplier] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
@@ -327,6 +328,11 @@ export default function App() {
   const nextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
   const prevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
 
+  const suppliers = useMemo(() => {
+    const uniqueSuppliers = Array.from(new Set(expenses.map(e => e.supplier).filter(Boolean)));
+    return ['all', ...uniqueSuppliers.sort()];
+  }, [expenses]);
+
   const filteredExpenses = useMemo(() => {
     let start: Date;
     let end: Date;
@@ -396,8 +402,9 @@ export default function App() {
     }).filter(e => {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
       const matchesType = filterType === 'all' || e.type === filterType;
+      const matchesSupplier = filterSupplier === 'all' || e.supplier === filterSupplier;
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesStatus && matchesType && matchesSearch;
+      return matchesStatus && matchesType && matchesSupplier && matchesSearch;
     }).sort((a, b) => {
       if (sortBy === 'dueDate') {
         return parseISO(a.dueDate).getTime() - parseISO(b.dueDate).getTime();
@@ -405,7 +412,7 @@ export default function App() {
         return a.condominium.localeCompare(b.condominium);
       }
     });
-  }, [expenses, filterStatus, filterType, searchTerm, currentDate, viewMode, customRange, quickFilter, sortBy]);
+  }, [expenses, filterStatus, filterType, filterSupplier, searchTerm, currentDate, viewMode, customRange, quickFilter, sortBy]);
 
   const chartData = useMemo(() => {
     let lançadas = 0;
@@ -748,23 +755,39 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="relative flex-1 max-w-sm">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                  <input 
-                    type="text"
-                    placeholder="Pesquisar condomínio..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
-                  />
-                  {searchTerm && (
-                    <button 
-                      onClick={() => setSearchTerm('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input 
+                      type="text"
+                      placeholder="Pesquisar condomínio..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
+                    />
+                    {searchTerm && (
+                      <button 
+                        onClick={() => setSearchTerm('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-zinc-400" />
+                    <select
+                      value={filterSupplier}
+                      onChange={(e) => setFilterSupplier(e.target.value)}
+                      className="bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
                     >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                      <option value="all">Todos Fornecedores</option>
+                      {suppliers.filter(s => s !== 'all').map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <span className="text-xs text-zinc-400 font-medium uppercase tracking-widest">
