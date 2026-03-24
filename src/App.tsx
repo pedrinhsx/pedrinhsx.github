@@ -257,7 +257,10 @@ export default function App() {
       const getNextStatus = (current: Expense['status'], type: Expense['type']): Expense['status'] => {
         if (current === 'neutro') return 'efetivado';
         if (current === 'efetivado') {
-          if (type === 'internet') return 'sem_fatura';
+          if (type === 'internet' || type === 'gás') return 'sem_fatura';
+          return 'neutro';
+        }
+        if (current === 'sem_fatura') {
           if (type === 'gás') return 'zerado';
           return 'neutro';
         }
@@ -279,6 +282,31 @@ export default function App() {
         
         let newPaidMonths = e.paidMonths || [];
         if (nextStatus === 'efetivado') {
+          if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
+        } else {
+          newPaidMonths = newPaidMonths.filter(m => m !== currentMonthStr);
+        }
+
+        return { ...e, statusByMonth: newStatusByMonth, paidMonths: newPaidMonths } as Expense;
+      }
+    });
+    saveToLocalStorage(updatedExpenses);
+  };
+
+  const setStatus = async (expense: Expense, newStatus: Expense['status']) => {
+    const currentMonthStr = format(currentDate, 'yyyy-MM');
+    
+    const updatedExpenses = expenses.map(e => {
+      if (e.id !== expense.id) return e;
+      
+      if (e.classification === 'variável') {
+        return { ...e, status: newStatus } as Expense;
+      } else {
+        const statusByMonth = e.statusByMonth || {};
+        const newStatusByMonth = { ...statusByMonth, [currentMonthStr]: newStatus };
+        
+        let newPaidMonths = e.paidMonths || [];
+        if (newStatus === 'efetivado') {
           if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
         } else {
           newPaidMonths = newPaidMonths.filter(m => m !== currentMonthStr);
@@ -749,7 +777,11 @@ export default function App() {
                   filteredExpenses.map((expense) => {
                     const isOverdue = expense.status === 'neutro' && isPast(parseISO(expense.dueDate)) && !isToday(parseISO(expense.dueDate));
                     return (
-                      <div key={expense.id} className="p-6 hover:bg-zinc-50 transition-colors group">
+                      <div 
+                        key={expense.id} 
+                        className="p-6 hover:bg-zinc-50 transition-colors group cursor-help"
+                        title={expense.description || 'Sem descrição'}
+                      >
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex items-start gap-4">
                             <div className={cn(
@@ -818,27 +850,55 @@ export default function App() {
                                   <><Circle className="w-3.5 h-3.5" /> Marcar Lançada</>
                                 )}
                               </button>
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                <button 
+                                  onClick={() => setStatus(expense, 'efetivado')}
+                                  className="p-1.5 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-all"
+                                  title="Marcar como Lançada"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                </button>
+                                {(expense.type === 'internet' || expense.type === 'gás') && (
+                                  <button 
+                                    onClick={() => setStatus(expense, 'sem_fatura')}
+                                    className="p-1.5 text-zinc-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-all"
+                                    title="Marcar como Sem Fatura"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {expense.type === 'gás' && (
+                                  <button 
+                                    onClick={() => setStatus(expense, 'zerado')}
+                                    className="p-1.5 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-all"
+                                    title="Marcar como Zerado"
+                                  >
+                                    <Droplets className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                <div className="w-px h-4 bg-zinc-200 mx-1" />
                                 <button 
                                   onClick={() => openEdit(expense)}
-                                  className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  className="p-1.5 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-all"
                                   title="Editar"
                                 >
-                                  <Edit2 className="w-4 h-4" />
+                                  <Edit2 className="w-3.5 h-3.5" />
                                 </button>
                                 <button 
                                   onClick={() => duplicateToBulk(expense)}
-                                  className="p-2 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  className="p-1.5 text-zinc-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-all"
                                   title="Adicionar múltiplos deste fornecedor"
                                 >
-                                  <Copy className="w-4 h-4" />
+                                  <Copy className="w-3.5 h-3.5" />
                                 </button>
                                 <button 
                                   onClick={() => deleteExpense(expense.id)}
-                                  className="p-2 text-zinc-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                  className="p-1.5 text-zinc-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
                                   title="Excluir"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1086,7 +1146,7 @@ export default function App() {
                         >
                           Lançada
                         </button>
-                        {formData.type === 'internet' && (
+                        {(formData.type === 'internet' || formData.type === 'gás') && (
                           <button
                             type="button"
                             onClick={() => setFormData({...formData, status: 'sem_fatura'})}
@@ -1284,7 +1344,10 @@ export default function App() {
                                 const getNextStatus = (current: Expense['status'], type: Expense['type']): Expense['status'] => {
                                   if (current === 'neutro') return 'efetivado';
                                   if (current === 'efetivado') {
-                                    if (type === 'internet') return 'sem_fatura';
+                                    if (type === 'internet' || type === 'gás') return 'sem_fatura';
+                                    return 'neutro';
+                                  }
+                                  if (current === 'sem_fatura') {
                                     if (type === 'gás') return 'zerado';
                                     return 'neutro';
                                   }
