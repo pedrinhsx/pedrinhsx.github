@@ -109,7 +109,8 @@ export default function App() {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node)) {
+      const isInput = (event.target as HTMLElement).tagName === 'INPUT';
+      if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node) && !isInput) {
         setActiveSuggestionIdx(null);
       }
     };
@@ -117,14 +118,13 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<{type: 'single' | 'bulk', field: 'condo' | 'supplier', index?: number} | null>(null);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<{type: 'single' | 'bulk' | 'filter', field: 'condo' | 'supplier', index?: number} | null>(null);
 
   const getCondoSuggestions = (input: string) => {
     const uniqueCondos = Array.from(new Set<string>(expenses.map(e => e.condominium))).filter(Boolean);
     if (!input) return uniqueCondos.slice(0, 5);
     return uniqueCondos.filter(c => 
-      c.toLowerCase().includes(input.toLowerCase()) &&
-      c.toLowerCase() !== input.toLowerCase()
+      c.toLowerCase().includes(input.toLowerCase())
     ).slice(0, 5);
   };
 
@@ -132,8 +132,7 @@ export default function App() {
     const uniqueSuppliers = Array.from(new Set<string>(expenses.map(e => e.supplier || ''))).filter(Boolean);
     if (!input) return uniqueSuppliers.slice(0, 5);
     return uniqueSuppliers.filter(s => 
-      s.toLowerCase().includes(input.toLowerCase()) &&
-      s.toLowerCase() !== input.toLowerCase()
+      s.toLowerCase().includes(input.toLowerCase())
     ).slice(0, 5);
   };
 
@@ -402,7 +401,7 @@ export default function App() {
     }).filter(e => {
       const matchesStatus = filterStatus === 'all' || e.status === filterStatus;
       const matchesType = filterType === 'all' || e.type === filterType;
-      const matchesSupplier = filterSupplier === 'all' || e.supplier === filterSupplier;
+      const matchesSupplier = filterSupplier === 'all' || (e.supplier?.toLowerCase().includes(filterSupplier.toLowerCase()));
       const matchesSearch = e.condominium.toLowerCase().includes(searchTerm.toLowerCase());
       return matchesStatus && matchesType && matchesSupplier && matchesSearch;
     }).sort((a, b) => {
@@ -775,18 +774,51 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 relative flex-1 min-w-[200px]">
                     <Filter className="w-4 h-4 text-zinc-400" />
-                    <select
-                      value={filterSupplier}
-                      onChange={(e) => setFilterSupplier(e.target.value)}
-                      className="bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-                    >
-                      <option value="all">Todos Fornecedores</option>
-                      {suppliers.filter(s => s !== 'all').map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
+                    <div className="relative w-full">
+                      <input 
+                        type="text"
+                        placeholder="Filtrar por fornecedor..."
+                        value={filterSupplier === 'all' ? '' : filterSupplier}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFilterSupplier(val || 'all');
+                          setActiveSuggestionIdx({ type: 'filter', field: 'supplier' });
+                        }}
+                        onFocus={() => setActiveSuggestionIdx({ type: 'filter', field: 'supplier' })}
+                        className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
+                      />
+                      {filterSupplier !== 'all' && (
+                        <button 
+                          onClick={() => setFilterSupplier('all')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      
+                      {activeSuggestionIdx?.type === 'filter' && activeSuggestionIdx?.field === 'supplier' && getSupplierSuggestions(filterSupplier === 'all' ? '' : filterSupplier).length > 0 && (
+                        <div 
+                          ref={suggestionRef}
+                          className="absolute z-30 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto"
+                        >
+                          {getSupplierSuggestions(filterSupplier === 'all' ? '' : filterSupplier).map((suggestion, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => {
+                                setFilterSupplier(suggestion);
+                                setActiveSuggestionIdx(null);
+                              }}
+                              className="w-full px-4 py-3 text-left text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100 last:border-0"
+                            >
+                              {suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
