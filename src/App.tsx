@@ -372,13 +372,33 @@ export default function App() {
     const condos = Array.from(new Set<string>(expenses.map(e => e.condominium)));
     const suppliers = Array.from(new Set<string>(expenses.map(e => e.supplier).filter(Boolean) as string[]));
     
-    // Find matched condo
-    const matchedCondo = condos.find(c => lowerText.includes(c.toLowerCase()));
-    if (!matchedCondo) return null;
-    
-    // Find matched supplier
+    // 1. Try to find matched supplier first (essential for both methods)
     const matchedSupplier = suppliers.find(s => lowerText.includes(s.toLowerCase()));
     if (!matchedSupplier) return null;
+
+    // 2. Try to find matched condo by name
+    let matchedCondo = condos.find(c => lowerText.includes(c.toLowerCase()));
+    
+    // 3. If not found by name, try to find by "Matrícula" (common in water/utility bills)
+    if (!matchedCondo) {
+      // Regex to find "matrícula" or "matricula" followed by numbers (ignoring spaces/dots/dashes)
+      // Example: "Matrícula: 123.456-7" or "Matricula 1234567"
+      const matriculaMatch = lowerText.match(/(?:matr[íi]cula|inscri[çc][ãa]o|c[óo]digo)\s*[:\-]?\s*([\d\.\-\/]+)/i);
+      
+      if (matriculaMatch && matriculaMatch[1]) {
+        const extractedMatricula = matriculaMatch[1].replace(/[\.\-\/]/g, '').trim();
+        
+        if (extractedMatricula.length >= 4) { // Minimum length to avoid false positives
+          matchedCondo = condos.find(c => {
+            // Clean the condo name to check if it contains the matrícula numbers
+            const cleanCondo = c.replace(/[\.\-\/]/g, '');
+            return cleanCondo.includes(extractedMatricula);
+          });
+        }
+      }
+    }
+
+    if (!matchedCondo) return null;
     
     // Now find the expense that matches both
     // We prioritize expenses in the current month or those that are not yet "efetivado"
