@@ -41,6 +41,10 @@ import { ptBR } from 'date-fns/locale';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Configure PDF.js worker using a stable CDN URL
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -77,7 +81,9 @@ export default function App() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [formTab, setFormTab] = useState<'single' | 'multiple'>('single');
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual' | 'settings'>('monthly');
+  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual' | 'settings' | 'verification'>('monthly');
+  const [isProcessingPdf, setIsProcessingPdf] = useState(false);
+  const [verificationResults, setVerificationResults] = useState<{ fileName: string, status: 'success' | 'error' | 'not_found', message: string }[]>([]);
   const [customRange, setCustomRange] = useState({
     start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
     end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
@@ -344,6 +350,123 @@ export default function App() {
   const nextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
   const prevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
 
+  const extractTextFromPdf = async (file: File): Promise<string> => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+    
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(" ");
+      fullText += pageText + "\n";
+    }
+    
+    return fullText;
+  };
+
+  const findMatchingExpense = (text: string): Expense | null => {
+    const lowerText = text.toLowerCase();
+    
+    // Get all unique condos and suppliers to match
+    const condos = Array.from(new Set<string>(expenses.map(e => e.condominium)));
+    const suppliers = Array.from(new Set<string>(expenses.map(e => e.supplier).filter(Boolean) as string[]));
+    
+    // Find matched condo
+    const matchedCondo = condos.find(c => lowerText.includes(c.toLowerCase()));
+    if (!matchedCondo) return null;
+    
+    // Find matched supplier
+    const matchedSupplier = suppliers.find(s => lowerText.includes(s.toLowerCase()));
+    if (!matchedSupplier) return null;
+    
+    // Now find the expense that matches both
+    // We prioritize expenses in the current month or those that are not yet "efetivado"
+    const currentMonthStr = format(currentDate, 'yyyy-MM');
+    
+    const possibleMatches = expenses.filter(e => 
+      e.condominium === matchedCondo && 
+      e.supplier === matchedSupplier &&
+      (e.status === 'neutro' || e.status === 'sem_fatura')
+    );
+    
+    if (possibleMatches.length === 0) return null;
+    
+    // Try to find one in the current month
+    const currentMonthMatch = possibleMatches.find(e => {
+      if (e.classification === 'variável') {
+        return e.dueDate.startsWith(currentMonthStr);
+      } else {
+        // For fixed, it's always "available" in every month, so we just pick it
+        return true;
+      }
+    });
+    
+    return currentMonthMatch || possibleMatches[0];
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    
+    setIsProcessingPdf(true);
+    setVerificationResults([]);
+    
+    const results: typeof verificationResults = [];
+    let updatedExpenses = [...expenses];
+    
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const text = await extractTextFromPdf(file);
+        const match = findMatchingExpense(text);
+        
+        if (match) {
+          const currentMonthStr = format(currentDate, 'yyyy-MM');
+          
+          updatedExpenses = updatedExpenses.map(e => {
+            if (e.id !== match.id) return e;
+            
+            if (e.classification === 'variável') {
+              return { ...e, status: 'efetivado' } as Expense;
+            } else {
+              const statusByMonth = e.statusByMonth || {};
+              const newStatusByMonth = { ...statusByMonth, [currentMonthStr]: 'efetivado' };
+              let newPaidMonths = e.paidMonths || [];
+              if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
+              return { ...e, statusByMonth: newStatusByMonth, paidMonths: newPaidMonths } as Expense;
+            }
+          });
+
+          results.push({ 
+            fileName: file.name, 
+            status: 'success', 
+            message: `Lançamento encontrado: ${match.condominium} (${match.supplier})` 
+          });
+        } else {
+          results.push({ 
+            fileName: file.name, 
+            status: 'not_found', 
+            message: 'Nenhum lançamento correspondente encontrado no texto do PDF.' 
+          });
+        }
+      } catch (err) {
+        console.error(err);
+        results.push({ 
+          fileName: file.name, 
+          status: 'error', 
+          message: 'Erro ao processar o arquivo PDF.' 
+        });
+      }
+    }
+    
+    saveToLocalStorage(updatedExpenses);
+    setVerificationResults(results);
+    setIsProcessingPdf(false);
+    // Reset input
+    e.target.value = '';
+  };
+
   const suppliers = useMemo(() => {
     const uniqueSuppliers = Array.from(new Set(expenses.map(e => e.supplier).filter(Boolean)));
     return ['all', ...uniqueSuppliers.sort()];
@@ -508,7 +631,7 @@ export default function App() {
         {/* Period Selector Tabs */}
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm mb-8 overflow-hidden">
           <div className="flex border-b border-zinc-100">
-            {(['period', 'monthly', 'annual', 'settings'] as const).map((mode) => (
+            {(['period', 'monthly', 'annual', 'settings', 'verification'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => {
@@ -522,7 +645,7 @@ export default function App() {
                     : "border-transparent text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                 )}
               >
-                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : mode === 'annual' ? 'Anual' : 'Configurações'}
+                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : mode === 'annual' ? 'Anual' : mode === 'settings' ? 'Configurações' : 'Verificação'}
               </button>
             ))}
           </div>
@@ -611,6 +734,86 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+            {viewMode === 'verification' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-zinc-900">Verificação Automática de Faturas</h2>
+                  <p className="text-zinc-500">Anexe os PDFs das faturas para marcar os lançamentos correspondentes como "Lançado" automaticamente.</p>
+                </div>
+
+                <div className="bg-white p-8 rounded-2xl border-2 border-dashed border-zinc-200 flex flex-col items-center justify-center text-center">
+                  <div className="bg-primary/10 p-4 rounded-full mb-4">
+                    <Plus className="w-8 h-8 text-primary" />
+                  </div>
+                  <h3 className="font-bold text-lg mb-1">Selecionar Faturas (PDF)</h3>
+                  <p className="text-sm text-zinc-500 mb-6 max-w-md">
+                    O sistema lerá o conteúdo dos arquivos para identificar o condomínio e o fornecedor, marcando o lançamento como efetivado.
+                  </p>
+                  
+                  <label className={cn(
+                    "bg-primary text-white px-8 py-3 rounded-xl font-bold cursor-pointer hover:bg-primary-hover transition-all shadow-lg shadow-primary/20 flex items-center gap-2",
+                    isProcessingPdf && "opacity-50 cursor-not-allowed"
+                  )}>
+                    <Search className="w-4 h-4" />
+                    {isProcessingPdf ? 'Processando...' : 'Selecionar Arquivos'}
+                    <input 
+                      type="file" 
+                      multiple 
+                      accept="application/pdf" 
+                      className="hidden" 
+                      onChange={handleFileUpload}
+                      disabled={isProcessingPdf}
+                    />
+                  </label>
+                </div>
+
+                {verificationResults.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                    <div className="px-6 py-4 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between">
+                      <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-400">Resultados do Processamento</h3>
+                      <button 
+                        onClick={() => setVerificationResults([])}
+                        className="text-xs text-zinc-400 hover:text-zinc-600 font-bold"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                    <div className="divide-y divide-zinc-100">
+                      {verificationResults.map((result, idx) => (
+                        <div key={idx} className="px-6 py-4 flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              "p-2 rounded-lg",
+                              result.status === 'success' ? "bg-emerald-100 text-emerald-600" :
+                              result.status === 'not_found' ? "bg-amber-100 text-amber-600" :
+                              "bg-rose-100 text-rose-600"
+                            )}>
+                              {result.status === 'success' ? <CheckCircle2 className="w-4 h-4" /> :
+                               result.status === 'not_found' ? <AlertCircle className="w-4 h-4" /> :
+                               <X className="w-4 h-4" />}
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-zinc-900">{result.fileName}</p>
+                              <p className="text-xs text-zinc-500">{result.message}</p>
+                            </div>
+                          </div>
+                          <span className={cn(
+                            "text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded-full",
+                            result.status === 'success' ? "bg-emerald-100 text-emerald-700" :
+                            result.status === 'not_found' ? "bg-amber-100 text-amber-700" :
+                            "bg-rose-100 text-rose-700"
+                          )}>
+                            {result.status === 'success' ? 'Sucesso' :
+                             result.status === 'not_found' ? 'Não Encontrado' :
+                             'Erro'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {viewMode === 'monthly' && (
