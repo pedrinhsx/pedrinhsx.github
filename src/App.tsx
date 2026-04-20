@@ -26,7 +26,9 @@ import {
   Flame,
   Building,
   Copy,
-  Settings
+  Settings,
+  FileUp,
+  FileCheck2
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -41,10 +43,6 @@ import { ptBR } from 'date-fns/locale';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
-import * as pdfjsLib from 'pdfjs-dist';
-
-// Configure PDF.js worker using a stable CDN URL
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -54,6 +52,8 @@ function cn(...inputs: ClassValue[]) {
 interface Expense {
   id: number;
   condominium: string;
+  category?: string; // Internal category
+  consumerId?: string; // New field: matrícula/UC
   supplier?: string;
   type: 'água' | 'luz' | 'internet' | 'gás';
   dueDate: string;
@@ -81,9 +81,7 @@ export default function App() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [formTab, setFormTab] = useState<'single' | 'multiple'>('single');
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual' | 'settings' | 'verification'>('monthly');
-  const [isProcessingPdf, setIsProcessingPdf] = useState(false);
-  const [verificationResults, setVerificationResults] = useState<{ fileName: string, status: 'success' | 'error' | 'not_found', message: string }[]>([]);
+  const [viewMode, setViewMode] = useState<'period' | 'monthly' | 'annual' | 'settings' | 'audit'>('monthly');
   const [customRange, setCustomRange] = useState({
     start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
     end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
@@ -97,6 +95,7 @@ export default function App() {
   const [formData, setFormData] = useState({
     condominium: '',
     supplier: '',
+    consumerId: '',
     type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado',
@@ -107,6 +106,7 @@ export default function App() {
   const [bulkExpenses, setBulkExpenses] = useState([{
     condominium: '',
     supplier: '',
+    consumerId: '',
     type: 'água' as 'água' | 'luz' | 'internet' | 'gás',
     dueDate: format(new Date(), 'yyyy-MM-dd'),
     status: 'neutro' as 'efetivado' | 'neutro' | 'sem_fatura' | 'zerado',
@@ -224,6 +224,7 @@ export default function App() {
     setFormData({
       condominium: '',
       supplier: '',
+      consumerId: '',
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
@@ -233,6 +234,7 @@ export default function App() {
     setBulkExpenses([{
       condominium: '',
       supplier: '',
+      consumerId: '',
       type: 'água',
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       status: 'neutro',
@@ -247,6 +249,7 @@ export default function App() {
     setFormData({
       condominium: expense.condominium,
       supplier: expense.supplier || '',
+      consumerId: expense.consumerId || '',
       type: expense.type,
       dueDate: expense.dueDate,
       status: expense.status,
@@ -261,6 +264,7 @@ export default function App() {
     setBulkExpenses([{
       condominium: expense.condominium,
       supplier: expense.supplier || '',
+      consumerId: expense.consumerId || '',
       type: expense.type,
       dueDate: expense.dueDate,
       status: 'neutro',
@@ -341,6 +345,50 @@ export default function App() {
     saveToLocalStorage(updatedExpenses);
   };
 
+  const handleAutoAudit = (files: File[]) => {
+    const currentMonthStr = format(currentDate, 'yyyy-MM');
+    let matches = 0;
+    
+    const updatedExpenses = expenses.map(e => {
+      // Check if it's already launched in this month/context
+      const statusByMonth = e.statusByMonth || {};
+      const currentMonthStatus = e.classification === 'variável' ? e.status : statusByMonth[currentMonthStr];
+      
+      if (currentMonthStatus === 'efetivado') return e;
+
+      // Logic to find a matching file
+      const foundFile = files.find(file => {
+        const fileName = file.name.toLowerCase();
+        const condoMatch = e.condominium && fileName.includes(e.condominium.toLowerCase());
+        const supplierMatch = e.supplier && fileName.includes(e.supplier.toLowerCase());
+        const consumerMatch = e.consumerId && fileName.includes(e.consumerId.toLowerCase());
+        
+        // We need at least condo + supplier OR consumerId
+        return (condoMatch && supplierMatch) || consumerMatch;
+      });
+
+      if (foundFile) {
+        matches++;
+        if (e.classification === 'variável') {
+          return { ...e, status: 'efetivado' } as Expense;
+        } else {
+          const newStatusByMonth = { ...statusByMonth, [currentMonthStr]: 'efetivado' };
+          let newPaidMonths = e.paidMonths || [];
+          if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
+          return { ...e, statusByMonth: newStatusByMonth, paidMonths: newPaidMonths } as Expense;
+        }
+      }
+      return e;
+    });
+
+    if (matches > 0) {
+      saveToLocalStorage(updatedExpenses);
+      alert(`${matches} lançamento(s) marcado(s) como efetivado(s)!`);
+    } else {
+      alert('Nenhum lançamento correspondente encontrado nos arquivos selecionados.');
+    }
+  };
+
   const deleteExpense = async (id: number) => {
     if (!confirm('Tem certeza que deseja excluir este lançamento?')) return;
     const updatedExpenses = expenses.filter(e => e.id !== id);
@@ -349,143 +397,6 @@ export default function App() {
 
   const nextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
   const prevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
-
-  const extractTextFromPdf = async (file: File): Promise<string> => {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = "";
-    
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += pageText + "\n";
-    }
-    
-    return fullText;
-  };
-
-  const findMatchingExpense = (text: string): Expense | null => {
-    const lowerText = text.toLowerCase();
-    
-    // Get all unique condos and suppliers to match
-    const condos = Array.from(new Set<string>(expenses.map(e => e.condominium)));
-    const suppliers = Array.from(new Set<string>(expenses.map(e => e.supplier).filter(Boolean) as string[]));
-    
-    // 1. Try to find matched supplier first (essential for both methods)
-    const matchedSupplier = suppliers.find(s => lowerText.includes(s.toLowerCase()));
-    if (!matchedSupplier) return null;
-
-    // 2. Try to find matched condo by name
-    let matchedCondo = condos.find(c => lowerText.includes(c.toLowerCase()));
-    
-    // 3. If not found by name, try to find by "Matrícula" (common in water/utility bills)
-    if (!matchedCondo) {
-      // Regex to find "matrícula" or "matricula" followed by numbers (ignoring spaces/dots/dashes)
-      // Example: "Matrícula: 123.456-7" or "Matricula 1234567"
-      const matriculaMatch = lowerText.match(/(?:matr[íi]cula|inscri[çc][ãa]o|c[óo]digo)\s*[:\-]?\s*([\d\.\-\/]+)/i);
-      
-      if (matriculaMatch && matriculaMatch[1]) {
-        const extractedMatricula = matriculaMatch[1].replace(/[\.\-\/]/g, '').trim();
-        
-        if (extractedMatricula.length >= 4) { // Minimum length to avoid false positives
-          matchedCondo = condos.find(c => {
-            // Clean the condo name to check if it contains the matrícula numbers
-            const cleanCondo = c.replace(/[\.\-\/]/g, '');
-            return cleanCondo.includes(extractedMatricula);
-          });
-        }
-      }
-    }
-
-    if (!matchedCondo) return null;
-    
-    // Now find the expense that matches both
-    // We prioritize expenses in the current month or those that are not yet "efetivado"
-    const currentMonthStr = format(currentDate, 'yyyy-MM');
-    
-    const possibleMatches = expenses.filter(e => 
-      e.condominium === matchedCondo && 
-      e.supplier === matchedSupplier &&
-      (e.status === 'neutro' || e.status === 'sem_fatura')
-    );
-    
-    if (possibleMatches.length === 0) return null;
-    
-    // Try to find one in the current month
-    const currentMonthMatch = possibleMatches.find(e => {
-      if (e.classification === 'variável') {
-        return e.dueDate.startsWith(currentMonthStr);
-      } else {
-        // For fixed, it's always "available" in every month, so we just pick it
-        return true;
-      }
-    });
-    
-    return currentMonthMatch || possibleMatches[0];
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    
-    setIsProcessingPdf(true);
-    setVerificationResults([]);
-    
-    const results: typeof verificationResults = [];
-    let updatedExpenses = [...expenses];
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const text = await extractTextFromPdf(file);
-        const match = findMatchingExpense(text);
-        
-        if (match) {
-          const currentMonthStr = format(currentDate, 'yyyy-MM');
-          
-          updatedExpenses = updatedExpenses.map(e => {
-            if (e.id !== match.id) return e;
-            
-            if (e.classification === 'variável') {
-              return { ...e, status: 'efetivado' } as Expense;
-            } else {
-              const statusByMonth = e.statusByMonth || {};
-              const newStatusByMonth = { ...statusByMonth, [currentMonthStr]: 'efetivado' };
-              let newPaidMonths = e.paidMonths || [];
-              if (!newPaidMonths.includes(currentMonthStr)) newPaidMonths = [...newPaidMonths, currentMonthStr];
-              return { ...e, statusByMonth: newStatusByMonth, paidMonths: newPaidMonths } as Expense;
-            }
-          });
-
-          results.push({ 
-            fileName: file.name, 
-            status: 'success', 
-            message: `Lançamento encontrado: ${match.condominium} (${match.supplier})` 
-          });
-        } else {
-          results.push({ 
-            fileName: file.name, 
-            status: 'not_found', 
-            message: 'Nenhum lançamento correspondente encontrado no texto do PDF.' 
-          });
-        }
-      } catch (err) {
-        console.error(err);
-        results.push({ 
-          fileName: file.name, 
-          status: 'error', 
-          message: 'Erro ao processar o arquivo PDF.' 
-        });
-      }
-    }
-    
-    saveToLocalStorage(updatedExpenses);
-    setVerificationResults(results);
-    setIsProcessingPdf(false);
-    // Reset input
-    e.target.value = '';
-  };
 
   const suppliers = useMemo(() => {
     const uniqueSuppliers = Array.from(new Set(expenses.map(e => e.supplier).filter(Boolean)));
@@ -651,7 +562,7 @@ export default function App() {
         {/* Period Selector Tabs */}
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm mb-8 overflow-hidden">
           <div className="flex border-b border-zinc-100">
-            {(['period', 'monthly', 'annual', 'settings', 'verification'] as const).map((mode) => (
+            {(['period', 'monthly', 'annual', 'settings', 'audit'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => {
@@ -665,7 +576,7 @@ export default function App() {
                     : "border-transparent text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                 )}
               >
-                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : mode === 'annual' ? 'Anual' : mode === 'settings' ? 'Configurações' : 'Verificação'}
+                {mode === 'period' ? 'Periodo' : mode === 'monthly' ? 'Mensal' : mode === 'annual' ? 'Anual' : mode === 'settings' ? 'Configurações' : 'Auto-Lançamento'}
               </button>
             ))}
           </div>
@@ -756,86 +667,79 @@ export default function App() {
                 </div>
               </div>
             )}
-            {viewMode === 'verification' && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-zinc-900">Verificação Automática de Faturas</h2>
-                  <p className="text-zinc-500">Anexe os PDFs das faturas para marcar os lançamentos correspondentes como "Lançado" automaticamente.</p>
+            {viewMode === 'audit' && (
+              <div className="space-y-8">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-zinc-900">Auto-Lançamento via PDF</h2>
+                    <p className="text-zinc-500">Arraste seus boletos aqui para marcar os lançamentos automaticamente baseando-se no nome do arquivo.</p>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+                    <button onClick={prevMonth} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                      <ChevronLeft className="w-4 h-4" />
+                      {format(subMonths(currentDate, 1), "MMM/yy", { locale: ptBR })}
+                    </button>
+                    <div className="w-px h-6 bg-zinc-200 mx-1" />
+                    <button onClick={nextMonth} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-zinc-50 text-zinc-600 transition-all font-medium text-sm">
+                      {format(addMonths(currentDate, 1), "MMM/yy", { locale: ptBR })}
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="bg-white p-8 rounded-2xl border-2 border-dashed border-zinc-200 flex flex-col items-center justify-center text-center">
-                  <div className="bg-primary/10 p-4 rounded-full mb-4">
-                    <Plus className="w-8 h-8 text-primary" />
-                  </div>
-                  <h3 className="font-bold text-lg mb-1">Selecionar Faturas (PDF)</h3>
-                  <p className="text-sm text-zinc-500 mb-6 max-w-md">
-                    O sistema lerá o conteúdo dos arquivos para identificar o condomínio e o fornecedor, marcando o lançamento como efetivado.
-                  </p>
-                  
-                  <label className={cn(
-                    "bg-primary text-white px-8 py-3 rounded-xl font-bold cursor-pointer hover:bg-primary-hover transition-all shadow-lg shadow-primary/20 flex items-center gap-2",
-                    isProcessingPdf && "opacity-50 cursor-not-allowed"
-                  )}>
-                    <Search className="w-4 h-4" />
-                    {isProcessingPdf ? 'Processando...' : 'Selecionar Arquivos'}
+                <div 
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const files = Array.from(e.dataTransfer.files) as File[];
+                    const filtered = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+                    if (filtered.length > 0) handleAutoAudit(filtered);
+                  }}
+                  className="relative group"
+                >
+                  <label className="flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-zinc-200 rounded-3xl bg-white hover:bg-zinc-50 hover:border-primary/30 transition-all cursor-pointer">
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                      <div className="bg-primary/5 p-4 rounded-2xl mb-4 group-hover:scale-110 transition-transform">
+                        <FileUp className="w-8 h-8 text-primary" />
+                      </div>
+                      <p className="mb-2 text-sm text-zinc-700">
+                        <span className="font-bold text-primary">Clique para anexar</span> ou arraste e solte
+                      </p>
+                      <p className="text-xs text-zinc-400">PDFs de boletos (será lido apenas o nome do arquivo)</p>
+                    </div>
                     <input 
                       type="file" 
                       multiple 
-                      accept="application/pdf" 
+                      accept=".pdf" 
                       className="hidden" 
-                      onChange={handleFileUpload}
-                      disabled={isProcessingPdf}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files || []) as File[];
+                        if (files.length > 0) handleAutoAudit(files);
+                      }}
                     />
                   </label>
                 </div>
 
-                {verificationResults.length > 0 && (
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="px-6 py-4 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between">
-                      <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-400">Resultados do Processamento</h3>
-                      <button 
-                        onClick={() => setVerificationResults([])}
-                        className="text-xs text-zinc-400 hover:text-zinc-600 font-bold"
-                      >
-                        Limpar
-                      </button>
-                    </div>
-                    <div className="divide-y divide-zinc-100">
-                      {verificationResults.map((result, idx) => (
-                        <div key={idx} className="px-6 py-4 flex items-center justify-between gap-4">
-                          <div className="flex items-center gap-3">
-                            <div className={cn(
-                              "p-2 rounded-lg",
-                              result.status === 'success' ? "bg-emerald-100 text-emerald-600" :
-                              result.status === 'not_found' ? "bg-amber-100 text-amber-600" :
-                              "bg-rose-100 text-rose-600"
-                            )}>
-                              {result.status === 'success' ? <CheckCircle2 className="w-4 h-4" /> :
-                               result.status === 'not_found' ? <AlertCircle className="w-4 h-4" /> :
-                               <X className="w-4 h-4" />}
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-zinc-900">{result.fileName}</p>
-                              <p className="text-xs text-zinc-500">{result.message}</p>
-                            </div>
-                          </div>
-                          <span className={cn(
-                            "text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded-full",
-                            result.status === 'success' ? "bg-emerald-100 text-emerald-700" :
-                            result.status === 'not_found' ? "bg-amber-100 text-amber-700" :
-                            "bg-rose-100 text-rose-700"
-                          )}>
-                            {result.status === 'success' ? 'Sucesso' :
-                             result.status === 'not_found' ? 'Não Encontrado' :
-                             'Erro'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <div className="bg-zinc-100/50 rounded-2xl p-6 border border-zinc-200">
+                  <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Como funciona?</h3>
+                  <ul className="text-sm text-zinc-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                      O sistema analisa o nome de cada PDF selecionado.
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                      Busca por termos que coincidam com o **Nome do Condomínio**, **Matrícula/UC** ou **Fornecedor**.
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                      Se encontrar uma despesa neutra correspondente ao mês selecionado ({format(currentDate, 'MMMM/yyyy', { locale: ptBR })}), ela será marcada como **Lançada**.
+                    </li>
+                  </ul>
+                </div>
               </div>
             )}
+
             {viewMode === 'monthly' && (
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
@@ -1447,6 +1351,18 @@ export default function App() {
                         </div>
                       )}
                     </div>
+
+                    <div className="w-full">
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Matrícula / Unidade Consumidora</label>
+                      <input 
+                        type="text" 
+                        value={formData.consumerId}
+                        onChange={e => setFormData({...formData, consumerId: e.target.value})}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-zinc-50/50"
+                        placeholder="ID para conferência automática"
+                      />
+                    </div>
+
                   </>
                 )}
                 
@@ -1586,8 +1502,9 @@ export default function App() {
                         type="button"
                         onClick={() => setBulkExpenses([...bulkExpenses, {
                           condominium: '',
+                          supplier: '',
+                          consumerId: '',
                           type: 'água',
-                          amount: '',
                           dueDate: format(new Date(), 'yyyy-MM-dd'),
                           status: 'neutro',
                           classification: 'fixa',
@@ -1683,6 +1600,21 @@ export default function App() {
                               ))}
                             </div>
                           )}
+                        </div>
+
+                        <div className="mb-4">
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Matrícula / UC</label>
+                          <input 
+                            type="text" 
+                            value={be.consumerId}
+                            onChange={e => {
+                              const newBulk = [...bulkExpenses];
+                              newBulk[idx].consumerId = e.target.value;
+                              setBulkExpenses(newBulk);
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 text-sm outline-none bg-white"
+                            placeholder="ID para conferência automática"
+                          />
                         </div>
 
                         <div className="grid grid-cols-2 gap-4 mb-4">
